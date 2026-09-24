@@ -138,11 +138,20 @@ jobs:
       - name: Recompute every share
         if: steps.collect.outputs.source != ''
         run: |
+          # **`pipefail`, and it is the whole job.** Without it the pipeline's
+          # status is `tee`'s, so this step detected a forged share, printed
+          # "does NOT meet its target" in full, and went green -- which was
+          # driven: a record with one hex digit of its nonce changed was caught
+          # and reported success. On a repository whose entire product is that a
+          # red X means something, an audit that finds fraud and passes is worse
+          # than no audit.
+          #
+          # Actions' default shell is `bash -e`, which does not include this.
+          set -o pipefail
           ./glados/pool/target/x86_64-unknown-linux-gnu/release/glados-pool \
               --verify batch.txt | tee verdict.txt
           # The exit code is the verdict. Non-zero means a share was credited
-          # that does not meet the target the operator published, which is the
-          # one thing worth a red X on this repository.
+          # that does not meet the target the operator published.
 
       - name: Keep the verdict
         if: always() && steps.collect.outputs.source != ''

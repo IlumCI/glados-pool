@@ -1,0 +1,30 @@
+name: web miner
+
+on:
+  push:
+    paths: ['web/**', 'mine/**', 'bridge/**', '.github/workflows/web.yml']
+  pull_request:
+    paths: ['web/**', 'mine/**', 'bridge/**', '.github/workflows/web.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - name: hash core against published vectors
+        run: cargo test --release --manifest-path web/core/Cargo.toml
+      - name: bridge
+        run: cargo test --manifest-path bridge/Cargo.toml
+      - name: wasm builds
+        run: ./web/build.sh
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: protocol helpers
+        run: node --test web/e2e/proto.test.mjs

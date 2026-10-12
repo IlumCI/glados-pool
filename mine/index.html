@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GLaDOS Miner</title>
+<meta name="description" content="Mine for the GLaDOS pool from a browser tab. Nothing runs until you press start.">
+<style>
+  :root {
+    --bg: #f6f4ef; --panel: #fffdf8; --ink: #1d1b16; --muted: #6b665b; --line: #e2ddd1;
+    --accent: #d9661f; --ok: #2f7d4f; --warn: #a5650f; --err: #b3261e;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #14130f; --panel: #1c1a15; --ink: #ece7dc; --muted: #9d968a; --line: #2f2c24;
+      --accent: #f08a3e; --ok: #5cb87f; --warn: #e0a24a; --err: #f07167;
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #14130f; --panel: #1c1a15; --ink: #ece7dc; --muted: #9d968a; --line: #2f2c24;
+    --accent: #f08a3e; --ok: #5cb87f; --warn: #e0a24a; --err: #f07167;
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.5 system-ui, sans-serif; }
+  main { max-width: 760px; margin: 0 auto; padding: 32px 16px 48px; }
+  h1 { font-size: 22px; margin: 0 0 4px; letter-spacing: -0.01em; }
+  .sub { color: var(--muted); margin: 0 0 24px; }
+  section { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px; margin-bottom: 16px; }
+  label { display: block; font-size: 13px; color: var(--muted); margin-bottom: 6px; }
+  input[type=text] { width: 100%; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--ink); font: 14px ui-monospace, monospace; }
+  .row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-top: 12px; }
+  button { padding: 10px 18px; border: 0; border-radius: 8px; background: var(--accent); color: #fff; font: 600 14px system-ui, sans-serif; cursor: pointer; }
+  button[data-running="true"] { background: var(--ink); color: var(--bg); }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  input[type=range] { flex: 1; min-width: 140px; accent-color: var(--accent); }
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; }
+  .stat b { display: block; font: 600 20px ui-monospace, monospace; font-variant-numeric: tabular-nums; }
+  .stat span { font-size: 12px; color: var(--muted); }
+  .note { font-size: 13px; color: var(--muted); margin: 8px 0 0; }
+  #log { font: 12px/1.6 ui-monospace, monospace; max-height: 260px; overflow: auto; margin: 0; white-space: pre-wrap; word-break: break-word; }
+  #log .warn { color: var(--warn); } #log .err { color: var(--err); }
+  .hw { font: 13px ui-monospace, monospace; color: var(--muted); word-break: break-word; }
+</style>
+</head>
+<body>
+<main>
+  <h1>GLaDOS Miner</h1>
+  <p class="sub">Mines for the GLaDOS pool in this tab, on your CPU. Nothing runs until you press start, and it stops when you close the tab.</p>
+
+  <section>
+    <label for="addr">Payout address (EVM, Robinhood Chain)</label>
+    <input id="addr" type="text" placeholder="0x..." spellcheck="false" autocomplete="off">
+    <div class="row">
+      <button id="go" type="button">Start mining</button>
+      <label for="duty" style="margin:0">Load <output id="duty-out">75%</output></label>
+      <input id="duty" type="range" min="10" max="100" step="5" value="75">
+    </div>
+    <p class="note">Shares are credited to this address. It is never sent anywhere except the pool.</p>
+  </section>
+
+  <section>
+    <div class="stats">
+      <div class="stat"><b id="s-rate">0 H/s</b><span>hash rate</span></div>
+      <div class="stat"><b id="s-acc">0</b><span>accepted shares</span></div>
+      <div class="stat"><b id="s-rej">0</b><span>rejected</span></div>
+      <div class="stat"><b id="s-hashes">0</b><span>hashes this session</span></div>
+    </div>
+    <p class="note" id="s-slots">Not mining.</p>
+  </section>
+
+  <section>
+    <p class="hw" id="hw">Reading hardware...</p>
+    <pre id="log"></pre>
+  </section>
+</main>
+<script type="module" src="./js/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,5 @@
+# TLS in front of the bridge. Caddy fetches and renews a Let's Encrypt
+# certificate on its own; port 80 and 443 must reach this host.
+ws.aperture.institute {
+	reverse_proxy 127.0.0.1:8080
+}

@@ -1,0 +1,17 @@
+[Unit]
+Description=GLaDOS browser-miner bridge (wss -> pool)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/local/bin/glados-bridge --listen 127.0.0.1:8080 --pool 127.0.0.1:3334 --trust-proxy --origin https://pool.aperture.institute
+Restart=always
+RestartSec=2
+DynamicUser=yes
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+MemoryMax=64M
+
+[Install]
+WantedBy=multi-user.target

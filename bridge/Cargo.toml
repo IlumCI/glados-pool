@@ -1,0 +1,16 @@
+[package]
+name = "glados-bridge"
+version = "0.1.0"
+edition = "2024"
+description = "WebSocket to GLaDOS-pool bridge for the browser miner"
+license = "MIT"
+publish = false
+
+[dependencies]
+tokio = { version = "1.53", features = ["rt-multi-thread", "macros", "net", "io-util", "time", "sync"] }
+tokio-tungstenite = "0.30"
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+
+[profile.release]
+lto = true
+codegen-units = 1

@@ -1,0 +1,19 @@
+[package]
+name = "glados-web-core"
+version = "0.1.0"
+edition = "2024"
+description = "Hash functions for the GLaDOS browser miner, compiled to WebAssembly"
+license = "MIT"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+
+[profile.test]
+opt-level = 3

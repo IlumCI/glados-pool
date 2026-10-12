@@ -46,17 +46,19 @@ const miner = new Miner({
   bridge: BRIDGE,
   wasm: new URL(hw.simd ? '../wasm/core-simd.wasm' : '../wasm/core.wasm', import.meta.url).href,
   threads,
+  gpu: hw.webgpu,
 });
 
 miner.on((kind, d) => {
   if (kind === 'log') log(d);
   if (kind === 'stats') {
-    $('s-rate').textContent = fmtRate(d.rate);
+    $('s-cpu').textContent = fmtRate(d.cpuRate);
+    $('s-gpu').textContent = hw.webgpu ? fmtRate(d.gpuRate) : 'no WebGPU';
     $('s-acc').textContent = d.accepted;
     $('s-rej').textContent = d.rejected;
     $('s-hashes').textContent = d.hashes.toLocaleString();
     $('s-slots').textContent = miner.running
-      ? d.slots.length ? 'Working ' + d.slots.join(', ') : 'Connected, waiting for a CPU job.'
+      ? d.slots.length ? 'Working ' + d.slots.join(', ') : 'Connected, waiting for a job.'
       : 'Not mining.';
   }
 });

@@ -3,13 +3,17 @@
 
 import * as P from './proto.js';
 
-const AGENT = 'glados-web/0.1';
+const AGENT = 'glados-web/0.2';
+
+// The algorithms the GPU worker has kernels for (kernels.js).
+const GPU_ALGOS = new Set(['sha256d', 'blake2s']);
 
 export class Miner {
-  constructor({ bridge, wasm, threads }) {
+  constructor({ bridge, wasm, threads, gpu }) {
     this.bridge = bridge;
     this.wasm = wasm;
     this.threads = threads;
+    this.useGpu = !!gpu;
     this.listeners = new Set();
     this.reset();
   }
@@ -17,14 +21,16 @@ export class Miner {
   reset() {
     this.ws = null;
     this.running = false;
-    this.workers = []; // { w, ready, key, slot }
+    this.workers = []; // CPU: { w, ready, key, slot, kind }
+    this.gpu = null; // the one GPU worker, same shape
+    this.spent = new Set(); // job keys whose whole nonce space the GPU searched
     this.jobs = new Map(); // slot -> parsed job
     this.exhausted = new Map(); // job key -> workers done
     this.pending = new Map(); // submit id -> nonce
     this.nextId = 2;
     this.retry = 1000;
-    this.stats = { hashes: 0, rate: 0, found: 0, accepted: 0, rejected: 0, bad: 0, slots: [] };
-    this.window = { hashes: 0, t: performance.now() };
+    this.stats = { hashes: 0, rate: 0, cpuRate: 0, gpuRate: 0, found: 0, accepted: 0, rejected: 0, bad: 0, slots: [] };
+    this.window = { cpu: 0, gpu: 0, t: performance.now() };
   }
 
   on(fn) {
@@ -44,13 +50,15 @@ export class Miner {
     this.worker = worker;
     this.duty = duty;
     this.running = true;
-    for (let i = 0; i < this.threads; i++) {
-      const w = new Worker(new URL('./worker.js', import.meta.url), { type: 'module' });
-      const slot = { w, ready: false, key: null, slot: null };
-      w.onmessage = (e) => this.fromWorker(slot, e.data);
+    const spawn = (file, kind) => {
+      const w = new Worker(new URL(file, import.meta.url), { type: 'module' });
+      const s = { w, ready: false, key: null, slot: null, kind };
+      w.onmessage = (e) => this.fromWorker(s, e.data);
       w.postMessage({ type: 'init', wasm: this.wasm });
-      this.workers.push(slot);
-    }
+      return s;
+    };
+    for (let i = 0; i < this.threads; i++) this.workers.push(spawn('./worker.js', 'cpu'));
+    if (this.useGpu) this.gpu = spawn('./gpu-worker.js', 'gpu');
     this.tick = setInterval(() => this.sample(), 1000);
     this.connect();
     this.log(`${this.threads} CPU thread(s), ${this.wasm.includes('simd') ? 'SIMD' : 'baseline'} build`);
@@ -61,6 +69,7 @@ export class Miner {
     clearInterval(this.tick);
     clearTimeout(this.reconnect);
     for (const s of this.workers) s.w.terminate();
+    if (this.gpu) this.gpu.w.terminate();
     if (this.ws) this.ws.close();
     const keep = this.listeners;
     this.reset();
@@ -71,7 +80,7 @@ export class Miner {
 
   setDuty(d) {
     this.duty = d;
-    for (const s of this.workers) s.w.postMessage({ type: 'duty', duty: d });
+    for (const s of this.all()) s.w.postMessage({ type: 'duty', duty: d });
   }
 
   connect() {
@@ -92,6 +101,10 @@ export class Miner {
       this.reconnect = setTimeout(() => this.connect(), this.retry);
       this.retry = Math.min(this.retry * 2, 60_000);
     };
+  }
+
+  all() {
+    return this.gpu ? [...this.workers, this.gpu] : this.workers;
   }
 
   send(text) {
@@ -139,10 +152,13 @@ export class Miner {
   /** Put every worker on the CPU-class job it should be working, if any. */
   plan() {
     const cpu = [...this.jobs.values()].filter((j) => j.cls === 'cpu' && j.algo);
-    if (!cpu.length && this.jobs.size) {
+    if (!cpu.length && this.jobs.size && !this.warnedCpu) {
       const names = [...new Set([...this.jobs.values()].map((j) => j.name))].join(', ');
-      this.log(`no CPU job on offer (pool is sending ${names}); waiting`, 'warn');
+      this.log(`no CPU job on offer (pool is sending ${names}); CPU idle`, 'warn');
+      this.warnedCpu = true;
     }
+    if (cpu.length) this.warnedCpu = false;
+    const gpuJob = this.planGpu();
     const per = P.assign(this.workers.length, cpu.map((j) => j.slot));
     let w = 0;
     for (const j of cpu) {
@@ -162,8 +178,34 @@ export class Miner {
       if (s.key) this.post(s, { type: 'stop' });
       s.key = s.slot = null;
     }
-    this.stats.slots = cpu.map((j) => `${j.coin || 'slot ' + j.slot} (${j.name} N=${j.algo.n} r=${j.algo.r})`);
+    this.stats.slots = cpu.map((j) => `CPU: ${j.coin || 'slot ' + j.slot} (${j.name} N=${j.algo.n} r=${j.algo.r})`);
+    if (gpuJob) this.stats.slots.push(`GPU: ${gpuJob.coin || 'slot ' + gpuJob.slot} (${gpuJob.name})`);
     this.emit('stats', this.stats);
+  }
+
+  /**
+   * The GPU works one GPU-class job at a time, the lowest slot whose nonce
+   * space it has not already spent; spending one asks the pool for fresh
+   * work and moves on, so a fast card is never idle and never rescans.
+   */
+  planGpu() {
+    const s = this.gpu;
+    if (!s || s.dead) return null;
+    const j = [...this.jobs.values()]
+      .filter((j) => j.cls === 'gpu' && GPU_ALGOS.has(j.name) && !this.spent.has(j.slot + ':' + j.job))
+      .sort((a, b) => a.slot - b.slot)[0];
+    if (!j) {
+      if (s.key) this.post(s, { type: 'stop' });
+      s.key = s.slot = null;
+      return null;
+    }
+    const key = j.slot + ':' + j.job;
+    if (s.key !== key) {
+      s.key = key;
+      s.slot = j.slot;
+      this.post(s, { type: 'job', key, name: j.name, ...this.wire(j), start: 0, end: 2 ** 32 });
+    }
+    return j;
   }
 
   wire(j) {
@@ -183,7 +225,7 @@ export class Miner {
       if (s.queued) s.w.postMessage(s.queued);
       s.queued = null;
     } else if (m.type === 'progress') {
-      this.window.hashes += m.hashes;
+      this.window[s.kind] += m.hashes;
       this.stats.hashes += m.hashes;
       for (const f of m.found) this.share(m.key, f.nonce);
     } else if (m.type === 'exhausted') {
@@ -192,6 +234,13 @@ export class Miner {
       const n = (this.exhausted.get(m.key) || 0) + 1;
       this.exhausted.set(m.key, n);
       const slot = Number(m.key.split(':')[0]);
+      if (s.kind === 'gpu') {
+        this.spent.add(m.key);
+        s.key = null;
+        this.send(P.work(this.nextId++, slot));
+        this.planGpu();
+        return;
+      }
       const k = this.workers.filter((w) => w.key === m.key).length;
       if (n >= k) {
         this.send(P.work(this.nextId++, slot));
@@ -200,6 +249,12 @@ export class Miner {
     } else if (m.type === 'bad') {
       this.stats.bad++;
       this.log(`hash core and re-check disagree on ${P.nonceHex(m.nonce)}; dropped`, 'err');
+    } else if (m.type === 'lost' || m.type === 'error') {
+      // The GPU is gone; the CPU path does not depend on it.
+      if (s.kind === 'gpu') s.dead = true;
+      this.log(`GPU ${m.type === 'lost' ? 'device lost' : 'error'}: ${m.text}; CPU mining continues`, 'err');
+    } else if (m.type === 'overflow') {
+      this.log(`GPU found ${m.hits} hits in one dispatch, more than it can return; dispatch shrunk`, 'warn');
     } else if (m.type === 'refused') {
       this.log('this build refused the job parameters', 'err');
     }
@@ -218,9 +273,12 @@ export class Miner {
 
   sample() {
     const now = performance.now();
-    const r = (this.window.hashes * 1000) / Math.max(1, now - this.window.t);
-    this.window = { hashes: 0, t: now };
-    this.stats.rate = this.stats.rate ? this.stats.rate * 0.7 + r * 0.3 : r;
+    const dt = Math.max(1, now - this.window.t);
+    const ewma = (old, r) => (old ? old * 0.7 + r * 0.3 : r);
+    this.stats.cpuRate = ewma(this.stats.cpuRate, (this.window.cpu * 1000) / dt);
+    this.stats.gpuRate = ewma(this.stats.gpuRate, (this.window.gpu * 1000) / dt);
+    this.stats.rate = this.stats.cpuRate + this.stats.gpuRate;
+    this.window = { cpu: 0, gpu: 0, t: now };
     this.emit('stats', this.stats);
   }
 }

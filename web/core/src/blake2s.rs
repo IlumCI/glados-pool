@@ -101,6 +101,11 @@ impl Blake2sHeader {
         Blake2sHeader { mid, tail: header[64..80].try_into().unwrap() }
     }
 
+    /// The state after the header's first 64 bytes, for the GPU kernel.
+    pub fn midstate(&self) -> [u32; 8] {
+        self.mid
+    }
+
     pub fn hash(&self, nonce: u32) -> [u8; 32] {
         let mut b = [0u8; 64];
         b[..16].copy_from_slice(&self.tail);

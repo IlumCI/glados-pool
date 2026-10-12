@@ -4,8 +4,9 @@
 //   node web/e2e/run.mjs            (Playwright resolvable via NODE_PATH)
 //
 // The fake pool offers two slots at once: a yespower job (CPU class) and a
-// sha256d job (GPU class). The claims are that the browser mines the first,
-// never submits for the second, and that every share it submits meets its
+// sha256d job (GPU class). The claims are that the CPU mines the first and
+// the GPU the second at the same time (or, with no WebGPU, that nothing is
+// submitted for the second), and that every share it submits meets its
 // target when the pool recomputes it. Exhausting a job's 2^32 nonces takes
 // days at browser yespower rates, so the ask-for-work path is not reached
 // here; web/e2e/proto.test.mjs covers the range arithmetic it rests on.
@@ -46,12 +47,15 @@ const hex = (b) => Buffer.from(b).toString('hex');
 
 // One in 16 nonces meets this target, so a few seconds of yespower find shares.
 const EASY = '0f' + 'ff'.repeat(31);
+// sha256d runs millions of times faster; its target is set so the GPU finds
+// a few shares a second rather than flooding the result slots.
+const HARD = '0000' + 'f'.repeat(60);
 const header = (seed) => hex(Uint8Array.from({ length: 80 }, (_, i) => (i * 7 + seed) & 255));
 let jobSeq = 0;
 const jobs = new Map(); // id -> { algo, header, target }
 function makeJob(slot, algo) {
   const id = 'j' + ++jobSeq;
-  const j = { id, slot, algo, header: header(jobSeq), target: EASY };
+  const j = { id, slot, algo, header: header(jobSeq), target: algo.name === 'sha256d' ? HARD : EASY };
   jobs.set(id, j);
   return j;
 }
@@ -63,7 +67,7 @@ const jobMsg = (j) =>
 
 const YES = { name: 'yespower', v10: true, n: 2048, r: 8 };
 const SHA = { name: 'sha256d' };
-const seen = { hello: null, submits: 0, verified: 0, wrongSlot: 0, badEcho: 0, workAsks: 0 };
+const seen = { hello: null, submits: 0, verified: 0, wrongSlot: 0, badEcho: 0, workAsks: 0, bySlot: { 1: 0, 2: 0 } };
 
 function verify(j, nonceHex) {
   const nonce = parseInt(nonceHex, 16) >>> 0;
@@ -95,7 +99,8 @@ const pool = net.createServer((sock) => {
       } else if (m.method === 'glados.submit') {
         seen.submits++;
         const j = jobs.get(m.params.job);
-        if (!j || j.slot !== 1) seen.wrongSlot++;
+        if (!j) seen.wrongSlot++;
+        else seen.bySlot[j.slot]++;
         if (j && m.params.echo?.e !== j.id) seen.badEcho++;
         const ok = j && /^[0-9a-f]{8}$/.test(m.params.nonce) && verify(j, m.params.nonce);
         if (ok) seen.verified++;
@@ -124,11 +129,11 @@ run('python3', ['-m', 'http.server', String(SITE_PORT), '--bind', '127.0.0.1', '
 await new Promise((r) => setTimeout(r, 1200));
 
 // --------------------------------------------------------------- the browser
-const browser = await chromium.launch({ executablePath: process.env.CHROMIUM || undefined });
+const browser = await chromium.launch({ executablePath: process.env.CHROMIUM || undefined, args: ['--enable-unsafe-webgpu'] });
 const page = await browser.newPage();
 const consoleErrors = [];
 page.on('pageerror', (e) => consoleErrors.push(String(e)));
-page.on('console', (m) => m.type() === 'error' && consoleErrors.push(m.text()));
+page.on('console', (m) => m.type() === 'error' && consoleErrors.push(m.text() + ' ' + (m.location()?.url || '')));
 await page.goto(`http://127.0.0.1:${SITE_PORT}/mine/?bridge=ws://127.0.0.1:${BRIDGE_PORT}`);
 await page.waitForFunction(() => !document.getElementById('hw').textContent.startsWith('Reading'));
 const hwLine = await page.textContent('#hw');
@@ -141,7 +146,7 @@ await page.waitForTimeout(15000);
 
 const accepted = Number(await page.textContent('#s-acc'));
 const rejected = Number(await page.textContent('#s-rej'));
-const rate = await page.textContent('#s-rate');
+const rate = `CPU ${await page.textContent('#s-cpu')}, GPU ${await page.textContent('#s-gpu')}`;
 const slots = await page.textContent('#s-slots');
 console.log(`     page: ${rate}, ${accepted} accepted, ${rejected} rejected; ${slots}`);
 
@@ -149,9 +154,13 @@ claim(seen.hello?.worker === ADDRESS, 'the hello carries the payout address as t
 claim(accepted >= 3, `the browser found and the pool accepted shares (${accepted})`);
 claim(seen.verified === seen.submits && seen.submits > 0, `every submitted share meets its target on recompute (${seen.verified}/${seen.submits})`);
 claim(rejected === 0, 'the page reports no rejections');
-claim(seen.wrongSlot === 0, 'nothing was submitted for the GPU-class slot');
+claim(seen.wrongSlot === 0, 'every share names a job the pool issued');
+const gpu = /WebGPU (?!not)/.test(hwLine);
+claim(seen.bySlot[1] > 0, `the CPU mined the yespower slot (${seen.bySlot[1]} shares)`);
+if (gpu) claim(seen.bySlot[2] > 0, `the GPU mined the sha256d slot at the same time (${seen.bySlot[2]} shares)`);
+else claim(seen.bySlot[2] === 0, 'with no WebGPU, nothing was submitted for the GPU-class slot');
 claim(seen.badEcho === 0, 'echo travels back verbatim');
-claim(/testzeny/.test(slots) && !/testbtc/.test(slots), 'the page says which CPU job it is working');
+claim(/CPU: testzeny/.test(slots) && (gpu ? /GPU: testbtc/.test(slots) : !/testbtc/.test(slots)), 'the page says which job each device is working');
 claim(consoleErrors.length === 0, `no page errors${consoleErrors.length ? ': ' + consoleErrors[0] : ''}`);
 
 await page.click('#go');

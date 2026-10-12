@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>GLaDOS Miner</title>
+<link rel="icon" href="data:,">
 <meta name="description" content="Mine for the GLaDOS pool from a browser tab. Nothing runs until you press start.">
 <style>
   :root {
@@ -48,7 +49,7 @@
 <body>
 <main>
   <h1>GLaDOS Miner</h1>
-  <p class="sub">Mines for the GLaDOS pool in this tab, on your CPU. Nothing runs until you press start, and it stops when you close the tab.</p>
+  <p class="sub">Mines for the GLaDOS pool in this tab, on your CPU and, where the browser supports WebGPU, your graphics card. Nothing runs until you press start, and it stops when you close the tab.</p>
 
   <section>
     <label for="addr">Payout address (EVM, Robinhood Chain)</label>
@@ -63,7 +64,8 @@
 
   <section>
     <div class="stats">
-      <div class="stat"><b id="s-rate">0 H/s</b><span>hash rate</span></div>
+      <div class="stat"><b id="s-cpu">0 H/s</b><span>CPU hash rate</span></div>
+      <div class="stat"><b id="s-gpu">-</b><span>GPU hash rate</span></div>
       <div class="stat"><b id="s-acc">0</b><span>accepted shares</span></div>
       <div class="stat"><b id="s-rej">0</b><span>rejected</span></div>
       <div class="stat"><b id="s-hashes">0</b><span>hashes this session</span></div>

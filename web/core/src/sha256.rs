@@ -165,6 +165,11 @@ impl Sha256d {
         Sha256d { mid, tail }
     }
 
+    /// The state after the header's first 64 bytes, for the GPU kernel.
+    pub fn midstate(&self) -> [u32; 8] {
+        self.mid
+    }
+
     pub fn hash(&self, nonce: u32) -> [u8; 32] {
         let mut b = self.tail;
         b[12..16].copy_from_slice(&nonce.to_le_bytes());

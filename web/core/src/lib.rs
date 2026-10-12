@@ -149,6 +149,23 @@ pub extern "C" fn scan(start: u32, count: u32) -> u32 {
     found.len() as u32
 }
 
+/// The midstate of a SHA-256d or BLAKE2s job, as eight little-endian u32s
+/// over the start of the buffer: the GPU kernels start from it, so the first
+/// 64 bytes are compressed once per job on the CPU rather than once per
+/// nonce on the GPU. Answers 0 for an algorithm with no midstate.
+#[unsafe(no_mangle)]
+pub extern "C" fn job_mid() -> u32 {
+    let mid = match job().as_ref().map(|j| &j.hasher) {
+        Some(Hasher::Sha256d(h)) => h.midstate(),
+        Some(Hasher::Blake2s(h)) => h.midstate(),
+        _ => return 0,
+    };
+    for (i, w) in mid.iter().enumerate() {
+        io()[4 * i..4 * i + 4].copy_from_slice(&w.to_le_bytes());
+    }
+    1
+}
+
 /// The digest of one nonce, written over the start of the buffer. For
 /// re-checking a share and for the page's known-answer test.
 #[unsafe(no_mangle)]

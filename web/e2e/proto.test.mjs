@@ -23,7 +23,7 @@ test('malformed headers and targets are refused', () => {
 });
 
 test('an algorithm this build cannot hash parses with a class and no algo', () => {
-  const j = P.parseJob(job({ algo: { name: 'neoscrypt' } }));
+  const j = P.parseJob(job({ algo: { name: 'heavyhash' } }));
   assert.equal(j.cls, 'gpu');
   assert.equal(j.algo, null);
 });

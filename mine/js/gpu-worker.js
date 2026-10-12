@@ -40,6 +40,13 @@ async function init(wasm) {
   const adapter = navigator.gpu && (await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' }));
   if (!adapter) throw new Error('no WebGPU adapter in this worker');
   device = await adapter.requestDevice();
+  // Allocation and validation failures in WebGPU are reported
+  // asynchronously, not thrown; unhandled, a dispatch that did nothing
+  // would still count its nonces as searched.
+  device.onuncapturederror = (ev) => {
+    job = null;
+    self.postMessage({ type: 'error', text: 'GPU: ' + (ev.error?.message || 'uncaptured error') });
+  };
   device.lost.then((i) => {
     device = null;
     job = null;
@@ -68,7 +75,17 @@ async function pipeline(name) {
     const per = k.scratch * 4;
     const cap = Math.min(device.limits.maxStorageBufferBindingSize, device.limits.maxBufferSize, 64 * 1024 * 1024);
     lanes = Math.max(k.wg, Math.floor(cap / per / k.wg) * k.wg);
-    scratch = device.createBuffer({ size: lanes * per, usage: GPUBufferUsage.STORAGE });
+    // A low-memory GPU may refuse this; halve until it fits or give up.
+    for (;;) {
+      device.pushErrorScope('out-of-memory');
+      device.pushErrorScope('validation');
+      scratch = device.createBuffer({ size: lanes * per, usage: GPUBufferUsage.STORAGE });
+      const bad = (await device.popErrorScope()) || (await device.popErrorScope());
+      if (!bad) break;
+      scratch.destroy();
+      if (lanes <= k.wg) throw new Error(`${name}: GPU could not allocate scratch (${bad.message})`);
+      lanes = Math.max(k.wg, (lanes >> 1) - ((lanes >> 1) % k.wg));
+    }
   }
   const uni = device.createBuffer({ size: uniSize, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
   const read = device.createBuffer({ size: 65 * 4, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });

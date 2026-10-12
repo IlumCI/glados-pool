@@ -21,6 +21,16 @@ const PWX_WORDS: usize = PWX_GATHER * PWX_SIMPLE * 2; // 16 words, 64 bytes
 pub enum Refused {
     N,
     R,
+    /// The scratch could not be allocated. Answered rather than aborting:
+    /// in wasm an abort is a trap that kills the worker with no message.
+    Memory,
+}
+
+fn zeroed(n: usize) -> Result<Vec<u32>, Refused> {
+    let mut v = Vec::new();
+    v.try_reserve_exact(n).map_err(|_| Refused::Memory)?;
+    v.resize(n, 0);
+    Ok(v)
 }
 
 pub struct Yespower {
@@ -66,7 +76,7 @@ impl Yespower {
             pwx_rounds,
             swidth,
             smask: (((1u32 << swidth) - 1) as usize * PWX_SIMPLE * 8) as u32,
-            v: vec![0; 32 * r * n as usize],
+            v: zeroed(32 * r * n as usize)?,
             x: vec![0; 32 * r],
             b: vec![0; 32 * r],
             s: vec![0; sboxes * sbytes1 / 4],

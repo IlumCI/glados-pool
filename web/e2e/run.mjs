@@ -69,6 +69,9 @@ const YES = { name: 'yespower', v10: true, n: 2048, r: 8 };
 // E2E_GPU_ALGO=neoscrypt offers NeoScrypt as the GPU-class slot instead.
 const GPU_ALGO = process.env.E2E_GPU_ALGO || 'sha256d';
 const SHA = { name: GPU_ALGO };
+// E2E_CHAOS=1: the pool misbehaves before and during the session.
+const CHAOS = !!process.env.E2E_CHAOS;
+let connections = 0;
 const seen = { hello: null, submits: 0, verified: 0, wrongSlot: 0, badEcho: 0, workAsks: 0, bySlot: { 1: 0, 2: 0 } };
 
 function verify(j, nonceHex) {
@@ -95,7 +98,18 @@ const pool = net.createServer((sock) => {
       const m = JSON.parse(line);
       if (m.method === 'glados.hello') {
         seen.hello = m.params;
+        connections++;
         sock.write(JSON.stringify({ id: m.id, result: { v: 1, slots: 2, session: 'e2e' }, error: null }) + '\n');
+        if (CHAOS && connections === 1) {
+          const bad = (params) => JSON.stringify({ method: 'glados.job', params }) + '\n';
+          sock.write('this is not json\n');
+          sock.write('{"method":"glados.job"\n');
+          sock.write(bad({ slot: 1, job: 'x1', header: 'zz', target: 'ff'.repeat(32), algo: YES }));
+          sock.write(bad({ slot: 1, job: 'x2', header: '00'.repeat(80), target: 'ff'.repeat(32), algo: { name: 'yespower', v10: true, n: 524288, r: 32 } }));
+          sock.write(bad({ slot: 3, job: 'x3', header: '00'.repeat(80), target: 'ff'.repeat(32), algo: { name: 'x11' } }));
+          for (let i = 0; i < 200; i++) sock.write(bad({ slot: 1, job: 'flood' + i, header: header(i), target: EASY, algo: YES, clean: true }));
+          sock.write('{"pad":"' + 'a'.repeat(1 << 20) + '"}\n'); // over the bridge's line ceiling: ends this connection
+        }
         sock.write(jobMsg(makeJob(1, YES)));
         sock.write(jobMsg(makeJob(2, SHA)));
       } else if (m.method === 'glados.submit') {
@@ -153,7 +167,14 @@ const slots = await page.textContent('#s-slots');
 console.log(`     page: ${rate}, ${accepted} accepted, ${rejected} rejected; ${slots}`);
 
 const disconnects = await page.evaluate(() => [...document.querySelectorAll('#log div')].filter((d) => d.textContent.includes('disconnected')).length);
-claim(disconnects === 0, `the page paces its submits and the bridge never cut it off (${disconnects} disconnects)`);
+if (!CHAOS) claim(disconnects === 0, `the page paces its submits and the bridge never cut it off (${disconnects} disconnects)`);
+else {
+  const logText = await page.textContent('#log');
+  claim(disconnects >= 1 && connections >= 2, `a connection the pool broke was re-established (${disconnects} disconnects, ${connections} hellos)`);
+  claim(/header is not 80 bytes/.test(logText), 'a malformed header is refused with its reason');
+  claim(/MiB of memory per thread/.test(logText), 'a 2 GiB yespower job is refused with its reason, not run');
+  claim(!/worker crashed/.test(logText), 'no worker crashed under any of it');
+}
 claim(seen.hello?.worker === ADDRESS, 'the hello carries the payout address as the worker');
 claim(accepted >= 3, `the browser found and the pool accepted shares (${accepted})`);
 claim(seen.verified === seen.submits && seen.submits > 0, `every submitted share meets its target on recompute (${seen.verified}/${seen.submits})`);

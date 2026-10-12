@@ -10,7 +10,9 @@ const AGENT = 'glados-web/0.3';
 // connection closed there. A real pool's VarDiff keeps a worker far below
 // this; it matters on a fresh connection before difficulty has adjusted.
 const SUBMIT_RATE = 8;
+const SUBMIT_BURST = 30;
 const QUEUE_MAX = 256;
+const RESPAWNS = 3; // per worker slot, so a worker that crashes on every job cannot loop
 
 // The algorithms the GPU worker has kernels for (kernels.js).
 const GPU_ALGOS = new Set(['sha256d', 'blake2s', 'neoscrypt']);
@@ -35,6 +37,8 @@ export class Miner {
     this.exhausted = new Map(); // job key -> workers done
     this.pending = new Map(); // submit id -> nonce
     this.queue = []; // shares waiting for the submit pacer
+    this.pacer = new P.Pacer(SUBMIT_RATE, SUBMIT_BURST);
+    this.assigned = new Map(); // job key -> CPU workers given a range of it
     this.nextId = 2;
     this.retry = 1000;
     this.stats = { hashes: 0, rate: 0, cpuRate: 0, gpuRate: 0, found: 0, accepted: 0, rejected: 0, bad: 0, slots: [] };
@@ -58,25 +62,47 @@ export class Miner {
     this.worker = worker;
     this.duty = duty;
     this.running = true;
-    const spawn = (file, kind) => {
-      const w = new Worker(new URL(file, import.meta.url), { type: 'module' });
-      const s = { w, ready: false, key: null, slot: null, kind };
-      w.onmessage = (e) => this.fromWorker(s, e.data);
-      w.postMessage({ type: 'init', wasm: this.wasm });
-      return s;
-    };
-    for (let i = 0; i < this.threads; i++) this.workers.push(spawn('./worker.js', 'cpu'));
-    if (this.useGpu) this.gpu = spawn('./gpu-worker.js', 'gpu');
+    for (let i = 0; i < this.threads; i++) this.workers.push(this.spawn('./worker.js', 'cpu'));
+    if (this.useGpu) this.gpu = this.spawn('./gpu-worker.js', 'gpu');
     this.tick = setInterval(() => this.sample(), 1000);
-    this.pacer = setInterval(() => this.drain(), 1000 / SUBMIT_RATE);
+    this.drainer = setInterval(() => this.drain(), 1000 / SUBMIT_RATE);
     this.connect();
     this.log(`${this.threads} CPU thread(s), ${this.wasm.includes('simd') ? 'SIMD' : 'baseline'} build`);
+  }
+
+  spawn(file, kind, respawns = 0) {
+    const w = new Worker(new URL(file, import.meta.url), { type: 'module' });
+    const s = { w, ready: false, key: null, slot: null, kind, file, respawns };
+    w.onmessage = (e) => this.fromWorker(s, e.data);
+    // A worker that throws or traps (a wasm abort, an allocation it could not
+    // make) otherwise goes silent: its share of the nonce space stops being
+    // searched and nothing on the page says so.
+    w.onerror = (e) => {
+      e.preventDefault?.();
+      this.crashed(s, e.message || 'worker crashed');
+    };
+    w.onmessageerror = () => this.crashed(s, 'unreadable message from worker');
+    w.postMessage({ type: 'init', wasm: this.wasm });
+    return s;
+  }
+
+  crashed(s, why) {
+    if (!this.running || s.dead) return;
+    s.dead = true;
+    s.w.terminate();
+    const again = s.respawns < RESPAWNS;
+    this.log(`${s.kind.toUpperCase()} worker crashed (${why})${again ? ', restarting it' : ', giving up on it'}`, 'err');
+    if (!again) return;
+    const fresh = this.spawn(s.file, s.kind, s.respawns + 1);
+    if (s.kind === 'gpu') this.gpu = fresh;
+    else this.workers[this.workers.indexOf(s)] = fresh;
+    this.plan();
   }
 
   stop() {
     if (!this.running) return;
     clearInterval(this.tick);
-    clearInterval(this.pacer);
+    clearInterval(this.drainer);
     clearTimeout(this.reconnect);
     for (const s of this.workers) s.w.terminate();
     if (this.gpu) this.gpu.w.terminate();
@@ -108,8 +134,12 @@ export class Miner {
       this.stats.disconnects = (this.stats.disconnects || 0) + 1;
       this.log(`disconnected${e.reason ? ': ' + e.reason : ''}, retrying in ${this.retry / 1000} s`, 'warn');
       this.jobs.clear();
+      // Submits in flight on a dead socket will never be answered.
+      this.pending.clear();
       this.plan();
-      this.reconnect = setTimeout(() => this.connect(), this.retry);
+      // Jittered, so every page does not come back in the same second after
+      // the bridge restarts and knock it over again.
+      this.reconnect = setTimeout(() => this.connect(), this.retry * (0.5 + Math.random()));
       this.retry = Math.min(this.retry * 2, 60_000);
     };
   }
@@ -176,9 +206,16 @@ export class Miner {
       const k = per.get(j.slot);
       const key = j.slot + ':' + j.job;
       const rs = P.ranges(k);
+      if (this.assigned.get(key) !== k) {
+        // A different split of this job means different ranges: what the
+        // workers had covered no longer adds up, so the count starts again.
+        this.assigned.set(key, k);
+        this.exhausted.delete(key);
+        for (let i = 0; i < k; i++) this.workers[w + i].key = null;
+      }
       for (let i = 0; i < k; i++, w++) {
         const s = this.workers[w];
-        if (s.key === key) continue;
+        if (s.key === key || s.dead) continue;
         s.key = key;
         s.slot = j.slot;
         this.post(s, { type: 'job', key, ...this.wire(j), ...rs[i] });
@@ -252,7 +289,7 @@ export class Miner {
         this.planGpu();
         return;
       }
-      const k = this.workers.filter((w) => w.key === m.key).length;
+      const k = this.assigned.get(m.key) || 1;
       if (n >= k) {
         this.send(P.work(this.nextId++, slot));
         this.exhausted.delete(m.key);
@@ -284,18 +321,24 @@ export class Miner {
     this.queue.push({ slot, id, nonce });
   }
 
-  /** One queued share per tick, skipping any whose job has been replaced. */
+  /**
+   * Send what the pacer allows, skipping shares whose job has been replaced.
+   * Tokens accrue by elapsed time, so a tick delayed by a hidden tab sends
+   * the backlog it owes rather than one share.
+   */
   drain() {
-    if (!this.ws || this.ws.readyState !== 1) return;
-    while (this.queue.length) {
+    if (!this.ws || this.ws.readyState !== 1 || !this.queue.length) return;
+    let n = this.pacer.take(performance.now());
+    while (n > 0 && this.queue.length) {
       const q = this.queue.shift();
       const j = this.jobs.get(q.slot);
       if (!j || j.job !== q.id) continue; // stale now; it would only be refused
       const sid = this.nextId++;
       this.pending.set(sid, q.nonce);
       this.send(P.submit(sid, j.job, q.nonce, j.echo));
-      return;
+      n--;
     }
+    this.pacer.refund(n);
   }
 
   sample() {

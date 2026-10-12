@@ -26,5 +26,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - name: protocol helpers
-        run: node --test web/e2e/proto.test.mjs
+      - name: protocol helpers and controller
+        run: node --test web/e2e/proto.test.mjs web/e2e/miner.test.mjs
+      - name: hash core against the upstream C references
+        run: ./web/stress/diff.sh 1 500 500

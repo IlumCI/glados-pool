@@ -2,10 +2,11 @@
 
 import { detect, cpuThreads } from './hw.js';
 import { Miner } from './miner.js';
-import { isAddress } from './proto.js';
+import { bridgeUrl, checkAddress } from './proto.js';
 
 // ?bridge=ws://127.0.0.1:8080 points the page at a local bridge for testing.
-const BRIDGE = new URLSearchParams(location.search).get('bridge') || 'wss://ws.aperture.institute';
+// Only a local address is honoured; see proto.bridgeUrl.
+const BRIDGE = bridgeUrl(new URLSearchParams(location.search).get('bridge'), 'wss://ws.aperture.institute');
 
 const $ = (id) => document.getElementById(id);
 const store = {
@@ -81,10 +82,12 @@ go.onclick = async () => {
     miner.stop();
   } else {
     const a = addr.value.trim();
-    if (!isAddress(a)) {
-      log({ t: Date.now(), text: 'that is not a 0x address (40 hex digits)', level: 'err' });
+    const c = checkAddress(a);
+    if (!c.ok) {
+      log({ t: Date.now(), text: c.why, level: 'err' });
       return;
     }
+    if (c.warn) log({ t: Date.now(), text: c.warn, level: 'warn' });
     store.set('address', a);
     try {
       await miner.start(a, duty.value / 100);

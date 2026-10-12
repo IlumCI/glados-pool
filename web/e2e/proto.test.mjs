@@ -66,3 +66,52 @@ test('neoscrypt is GPU class and parses with a bare name', () => {
   assert.equal(j.cls, 'gpu');
   assert.equal(j.algo.id, P.ALGO.neoscrypt);
 });
+
+// ---- stress-test additions: each of these failed or was missing before ----
+
+test('yespower jobs whose scratch would exceed the memory cap are refused', () => {
+  const big = P.parseJob(job({ algo: { name: 'yespower', v10: true, n: 524288, r: 32 } }));
+  assert.ok(big.error && /memory/.test(big.error), big.error);
+  const real = P.parseJob(job({ algo: { name: 'yespower', v10: true, n: 4096, r: 32 } }));
+  assert.ok(!real.error, 'N=4096 r=32 (16 MiB) is a real coin and must pass');
+  assert.ok(P.parseJob(job({ algo: { name: 'yespower', v10: true, n: 1000, r: 8 } })).error, 'N not a power of two');
+  assert.ok(P.parseJob(job({ algo: { name: 'yespower', v10: true, n: 2048, r: 40 } })).error, 'r out of range');
+  assert.ok(P.parseJob(job({ algo: { name: 'yespower', v10: true, n: 2048, r: 8, pers: 'aa'.repeat(401) } })).error, 'pers over 400 bytes');
+});
+
+test('the bridge can be overridden only to a local address', () => {
+  const D = 'wss://ws.aperture.institute';
+  assert.equal(P.bridgeUrl(null, D), D);
+  assert.equal(P.bridgeUrl('ws://127.0.0.1:8080', D), 'ws://127.0.0.1:8080');
+  assert.equal(P.bridgeUrl('ws://localhost:9000', D), 'ws://localhost:9000');
+  assert.equal(P.bridgeUrl('wss://evil.example', D), D, 'a link must not redirect hashrate elsewhere');
+  assert.equal(P.bridgeUrl('ws://127.0.0.1.evil.example', D), D);
+  assert.equal(P.bridgeUrl('javascript:alert(1)', D), D);
+});
+
+test('keccak-256 matches the published empty and abc digests', () => {
+  assert.equal(P.keccak256Hex(new Uint8Array(0)), 'c5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470');
+  assert.equal(P.keccak256Hex(new TextEncoder().encode('abc')), '4e03657aea45a94fc7d47ba826c8d667c0d1e6e33a64a036ec44f58fa12d6c45');
+  // Two blocks of rate: 200 bytes crosses the 136-byte block boundary.
+  assert.equal(P.keccak256Hex(new Uint8Array(200).fill(0xa3)).length, 64);
+});
+
+test('EIP-55: the published checksummed addresses pass, a one-letter case flip fails', () => {
+  for (const a of ['0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed', '0xfB6916095ca1df60bB79Ce92cE3Ea74c37c5d359',
+    '0xdbF03B407c01E7cD3CBea99509d93f8DDDC8C6FB', '0xD1220A0cf47c7B9Be7A2E6BA89F429762e7b9aDb']) {
+    assert.equal(P.checkAddress(a).ok, true, a);
+  }
+  assert.equal(P.checkAddress('0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAeD').ok, false, 'one flipped case');
+  const lower = P.checkAddress('0x5aaeb6053f3e94c9b9a09f33669435e7ef1beaed');
+  assert.equal(lower.ok, true);
+  assert.ok(lower.warn, 'all-lowercase carries no checksum and says so');
+  assert.equal(P.checkAddress('0x123').ok, false);
+});
+
+test('the submit pacer sends a backlog after a throttled tick, but never more than its burst', () => {
+  const p = new P.Pacer(8, 30);
+  assert.equal(p.take(0), 30, 'starts full');
+  assert.equal(p.take(0), 0);
+  assert.equal(p.take(500), 4, 'half a second at 8/s');
+  assert.equal(p.take(60_500), 30, 'a minute-long throttle releases a burst, capped');
+});

@@ -38,6 +38,8 @@ use tokio_tungstenite::tungstenite::handshake::server::{ErrorResponse, Request, 
 use tokio_tungstenite::tungstenite::http::StatusCode;
 use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
 use tokio_tungstenite::tungstenite::Message;
+use tokio_tungstenite::tungstenite::protocol::CloseFrame;
+use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 
 /// The longest line accepted in either direction. A job is a few hundred bytes
 /// and a submit under two hundred; anything near this is not a miner.
@@ -171,11 +173,22 @@ impl Bucket {
 pub async fn serve(listener: TcpListener, cfg: Config) -> std::io::Result<()> {
     let cfg = Arc::new(cfg);
     let counts = Arc::new(Mutex::new(Counts::default()));
+    // Every socket in any state holds a permit, the ones still handshaking
+    // included. Without it the connection cap is counted only after a
+    // handshake, and a client opening sockets that never send a byte holds a
+    // task and a descriptor apiece for the whole handshake timeout, unbounded.
+    // Twice the connection cap leaves room for honest handshakes in flight.
+    let sockets = Arc::new(tokio::sync::Semaphore::new(cfg.max_conns.saturating_mul(2).max(1)));
     loop {
         let (stream, peer) = listener.accept().await?;
+        let Ok(permit) = sockets.clone().try_acquire_owned() else {
+            drop(stream);
+            continue;
+        };
         let cfg = cfg.clone();
         let counts = counts.clone();
         tokio::spawn(async move {
+            let _permit = permit;
             if let Err(e) = handle(stream, peer, cfg, counts).await {
                 eprintln!("[bridge] {peer} closed: {e}");
             }
@@ -206,9 +219,16 @@ async fn handle(
         }
         Ok(resp)
     };
+    // tungstenite's default read buffer is 128 KiB per connection, which at
+    // the connection cap was ~150 MiB measured -- on a host the pool's own
+    // sizing calls comfortable at 32 MB. Messages are capped at 8 KiB, so a
+    // buffer of the same order loses nothing.
     let ws_cfg = WebSocketConfig::default()
         .max_message_size(Some(MAX_LINE))
-        .max_frame_size(Some(MAX_LINE));
+        .max_frame_size(Some(MAX_LINE))
+        .read_buffer_size(4096)
+        .write_buffer_size(0)
+        .max_write_buffer_size(64 * 1024);
     let ws = timeout(
         Duration::from_secs(10),
         tokio_tungstenite::accept_hdr_async_with_config(stream, callback, Some(ws_cfg)),
@@ -222,17 +242,34 @@ async fn handle(
     let _slot = match claim(&counts, ip, &cfg) {
         Ok(s) => s,
         Err(why) => {
-            let _ = ws_tx
-                .send(Message::Close(Some(tokio_tungstenite::tungstenite::protocol::CloseFrame {
-                    code: tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode::Again,
-                    reason: why.into(),
-                })))
-                .await;
+            close_with(&mut ws_tx, CloseCode::Again, why).await;
             return Err(why.into());
         }
     };
     eprintln!("[bridge] {ip} open, origin {}", origin.as_deref().unwrap_or("-"));
+    let r = relay(&mut ws_tx, &mut ws_rx, &cfg).await;
+    // Every way out after the handshake says why in the close frame: a
+    // browser sees only the frame, and "disconnected" with no reason is a
+    // fault nobody can act on -- a dead pool reads exactly like a dead bridge.
+    if let Err(why) = &r {
+        let code = if why.starts_with("pool") { CloseCode::Again } else { CloseCode::Policy };
+        close_with(&mut ws_tx, code, why).await;
+    }
+    r
+}
 
+type WsTx = futures_util::stream::SplitSink<tokio_tungstenite::WebSocketStream<TcpStream>, Message>;
+type WsRx = futures_util::stream::SplitStream<tokio_tungstenite::WebSocketStream<TcpStream>>;
+
+async fn close_with(tx: &mut WsTx, code: CloseCode, why: &str) {
+    // A close reason is capped at 123 bytes by the protocol.
+    let mut reason = why.to_string();
+    reason.truncate(120);
+    let _ = tx.send(Message::Close(Some(CloseFrame { code, reason: reason.into() }))).await;
+    let _ = tx.close().await;
+}
+
+async fn relay(ws_tx: &mut WsTx, ws_rx: &mut WsRx, cfg: &Config) -> Result<(), String> {
     let pool = timeout(Duration::from_secs(10), TcpStream::connect(&cfg.pool))
         .await
         .map_err(|_| "pool connect timed out".to_string())?
@@ -268,7 +305,14 @@ async fn handle(
                         buf.push(b'\n');
                         pool_tx.write_all(&buf).await.map_err(|e| format!("pool: {e}"))?;
                     }
-                    Message::Ping(_) | Message::Pong(_) => {}
+                    // Control frames are frames: tungstenite answers each ping
+                    // with a pong, so an uncounted ping is a free way to make
+                    // the bridge do work and write bytes.
+                    Message::Ping(_) | Message::Pong(_) => {
+                        if !bucket.take(cfg.rate, cfg.burst) {
+                            return Err("frame rate exceeded".into());
+                        }
+                    }
                     Message::Close(_) => return Ok(()),
                     Message::Binary(_) | Message::Frame(_) => return Err("binary frame".into()),
                 }

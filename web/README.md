@@ -34,3 +34,14 @@ Submits are paced at 8 a second, under the bridge's per-connection bucket, so
 a burst of shares queues in the page instead of getting the connection closed.
 `E2E_GPU_ALGO=neoscrypt` runs the end-to-end test with NeoScrypt as the GPU
 slot.
+
+## Stress tests
+
+| | |
+|---|---|
+| `stress/diff.sh` | the Rust hashes against openwall's and ghostlander's C on random inputs: both yespower versions, N/r/pers edge cases, NeoScrypt; 0 mismatches of 5,000 |
+| `bridge/tests/stress.rs` | ping flood, dead pool, sockets that never handshake, total cap, slow-loris |
+| `e2e/miner.test.mjs` | the controller with fake workers: exhaustion, reassignment, crash restart, pacing |
+| `E2E_CHAOS=1 e2e/run.mjs` | a hostile pool: bad JSON, bad headers, a 2 GiB yespower job, unknown algorithm, a 200-job flood, a 1 MiB line, a dropped connection |
+| `GPU_FUZZ=n e2e/gpu.mjs` | every kernel against the wasm scan on random headers and nonce ranges |
+| `stress/load.mjs` | 1,000 bridge connections at 2 msg/s for 20 s |

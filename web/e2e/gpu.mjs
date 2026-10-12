@@ -23,7 +23,7 @@ const srv = spawn('python3', ['-m', 'http.server', String(PORT), '--bind', '127.
 await new Promise((r) => setTimeout(r, 800));
 const browser = await chromium.launch({ executablePath: process.env.CHROMIUM || undefined, args: ['--enable-unsafe-webgpu'] });
 const page = await browser.newPage();
-await page.goto(`http://127.0.0.1:${PORT}/mine/index.html`);
+await page.goto(`http://127.0.0.1:${PORT}/mine/index.html?fuzz=${process.env.GPU_FUZZ || 0}`);
 
 const result = await page.evaluate(async () => {
   const { KERNELS, params } = await import('/mine/js/kernels.js');
@@ -37,14 +37,25 @@ const result = await page.evaluate(async () => {
   const out = [];
   // sha256d and blake2s: 32,768 nonces at 1 in 64. neoscrypt is ~10^5 times
   // costlier per nonce and SwiftShader runs it on the CPU, so 512 at 1 in 8.
+  // Then random headers and random ranges (GPU_FUZZ=n of each), so a kernel
+  // that is right for one header layout and wrong for another is caught.
+  const FUZZ = Number(new URLSearchParams(location.search).get('fuzz') || 0);
+  let seed = 0x9e3779b9;
+  const rnd = () => ((seed = (seed * 1664525 + 1013904223) >>> 0), seed);
   const CASES = [
-    { name: 'sha256d', count: 32768, step: 1024, top: 0x03 },
-    { name: 'blake2s', count: 32768, step: 1024, top: 0x03 },
-    { name: 'neoscrypt', count: 512, step: 128, top: 0x1f },
+    { name: 'sha256d', count: 32768, step: 1024, top: 0x03, base: 2 ** 32 - 32768, fixed: true },
+    { name: 'blake2s', count: 32768, step: 1024, top: 0x03, base: 2 ** 32 - 32768, fixed: true },
+    { name: 'neoscrypt', count: 512, step: 128, top: 0x1f, base: 2 ** 32 - 512, fixed: true },
   ];
-  for (const { name, count: COUNT, step: STEP, top } of CASES) {
-    const BASE = 2 ** 32 - COUNT; // the last range, ending exactly at the wrap
-    const header = Uint8Array.from({ length: 80 }, (_, i) => (i * 13 + name.length) & 255);
+  for (let f = 0; f < FUZZ; f++) {
+    CASES.push({ name: 'sha256d', count: 4096, step: 1024, top: 0x07, base: rnd() & ~4095 });
+    CASES.push({ name: 'blake2s', count: 4096, step: 1024, top: 0x07, base: rnd() & ~4095 });
+    if (f < 3) CASES.push({ name: 'neoscrypt', count: 128, step: 128, top: 0x3f, base: rnd() & ~127 });
+  }
+  for (const { name, count: COUNT, step: STEP, top, base: BASE, fixed } of CASES) {
+    const header = fixed
+      ? Uint8Array.from({ length: 80 }, (_, i) => (i * 13 + name.length) & 255)
+      : Uint8Array.from({ length: 80 }, () => rnd() & 255);
     const target = new Uint8Array(32).fill(0xff);
     target[0] = top;
     io().set(header, 0);
@@ -59,7 +70,7 @@ const result = await page.evaluate(async () => {
     }
     // wasm's answer, nonce by nonce.
     const want = [];
-    for (let n = BASE; n < 2 ** 32; n++) {
+    for (let n = BASE; n < BASE + COUNT; n++) {
       x.hash_one(n >>> 0);
       if (P.belowTarget(io().slice(0, 32), target)) want.push(n >>> 0);
     }
@@ -81,7 +92,7 @@ const result = await page.evaluate(async () => {
     const bind = device.createBindGroup({ layout: pipe.getBindGroupLayout(0), entries });
     const got = [];
     let overflow = false;
-    for (let base = BASE; base < 2 ** 32; base += STEP) {
+    for (let base = BASE; base < BASE + COUNT; base += STEP) {
       device.queue.writeBuffer(uni, 0, params(k, mid, header, target, base, STEP, iters));
       device.queue.writeBuffer(res, 0, new Uint32Array(65));
       const enc = device.createCommandEncoder();
@@ -100,7 +111,7 @@ const result = await page.evaluate(async () => {
     }
     got.sort((a, b) => a - b);
     const same = got.length === want.length && got.every((v, i) => v === want[i]);
-    out.push({ name, want: want.length, got: got.length, same, overflow, min: Math.max(8, COUNT / 512) });
+    out.push({ name, want: want.length, got: got.length, same, overflow, min: Math.max(4, COUNT / 512), base: BASE >>> 0 });
   }
   const info = adapter.info || {};
   return { adapter: `${info.vendor} ${info.architecture}`, out };
@@ -115,7 +126,7 @@ if (result.error) {
   for (const r of result.out) {
     const ok = r.same && !r.overflow && r.want > r.min;
     if (!ok) failed++;
-    console.log(`${ok ? 'ok  ' : 'FAIL'} ${r.name}: kernel found ${r.got}, wasm found ${r.want}, identical sets: ${r.same}, overflow: ${r.overflow}`);
+    console.log(`${ok ? 'ok  ' : 'FAIL'} ${r.name} @${r.base.toString(16)}: kernel found ${r.got}, wasm found ${r.want}, identical sets: ${r.same}, overflow: ${r.overflow}`);
   }
 }
 await browser.close();

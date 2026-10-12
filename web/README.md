@@ -27,5 +27,10 @@ Locally: `python3 -m http.server 8000` at the repo root, a bridge with
 
 CPU and GPU mine at the same time on different jobs: the CPU takes CPU-class
 work (yespower), the GPU takes GPU-class work it has a kernel for (sha256d,
-blake2s), one slot at a time, asking the pool for fresh work when a job's
-nonce space is spent. neoscrypt and heavyhash are GPU-class with no kernel yet.
+blake2s, neoscrypt), one slot at a time, asking the pool for fresh work when a
+job's nonce space is spent. heavyhash is GPU-class with no kernel yet.
+
+Submits are paced at 8 a second, under the bridge's per-connection bucket, so
+a burst of shares queues in the page instead of getting the connection closed.
+`E2E_GPU_ALGO=neoscrypt` runs the end-to-end test with NeoScrypt as the GPU
+slot.

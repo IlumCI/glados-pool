@@ -60,3 +60,9 @@ test('addresses must be 0x and 40 hex digits', () => {
   assert.ok(!P.isAddress('0x' + 'a'.repeat(39)));
   assert.ok(!P.isAddress('a'.repeat(42)));
 });
+
+test('neoscrypt is GPU class and parses with a bare name', () => {
+  const j = P.parseJob({ slot: 3, job: 'n', header: '00'.repeat(80), target: 'ff'.repeat(32), algo: { name: 'neoscrypt' } });
+  assert.equal(j.cls, 'gpu');
+  assert.equal(j.algo.id, P.ALGO.neoscrypt);
+});

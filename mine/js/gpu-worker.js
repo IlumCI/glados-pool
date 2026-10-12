@@ -56,17 +56,29 @@ async function pipeline(name) {
   const err = info.messages.find((msg) => msg.type === 'error');
   if (err) throw new Error(`${name} kernel: ${err.message} (line ${err.lineNum})`);
   const pipe = await device.createComputePipelineAsync({ layout: 'auto', compute: { module, entryPoint: 'main' } });
-  const uni = device.createBuffer({ size: 96, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+
+  const uniSize = k.full ? 128 : 96;
   const res = device.createBuffer({ size: 65 * 4, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST });
+  // A memory-hard kernel owns `scratch` words per invocation, so the number
+  // of invocations in flight is fixed by how much storage one binding may
+  // hold; the dispatch grows by nonces per invocation instead.
+  let scratch = null;
+  let lanes = 0;
+  if (k.scratch) {
+    const per = k.scratch * 4;
+    const cap = Math.min(device.limits.maxStorageBufferBindingSize, device.limits.maxBufferSize, 64 * 1024 * 1024);
+    lanes = Math.max(k.wg, Math.floor(cap / per / k.wg) * k.wg);
+    scratch = device.createBuffer({ size: lanes * per, usage: GPUBufferUsage.STORAGE });
+  }
+  const uni = device.createBuffer({ size: uniSize, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
   const read = device.createBuffer({ size: 65 * 4, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
-  const bind = device.createBindGroup({
-    layout: pipe.getBindGroupLayout(0),
-    entries: [
-      { binding: 0, resource: { buffer: uni } },
-      { binding: 1, resource: { buffer: res } },
-    ],
-  });
-  const p = { kernel: k, pipe, uni, res, read, bind };
+  const entries = [
+    { binding: 0, resource: { buffer: uni } },
+    { binding: 1, resource: { buffer: res } },
+  ];
+  if (scratch) entries.push({ binding: 2, resource: { buffer: scratch } });
+  const bind = device.createBindGroup({ layout: pipe.getBindGroupLayout(0), entries });
+  const p = { kernel: k, pipe, uni, res, read, bind, lanes, iters: 1 };
   pipes.set(name, p);
   return p;
 }
@@ -76,10 +88,13 @@ function setJob(m) {
   const b = io();
   b.set(m.header, 0);
   b.set(m.target, 80);
-  if (!x.job_set(m.algo, 0, 0, 0, -1) || !x.job_mid()) throw new Error('wasm refused the job');
+  if (!x.job_set(m.algo, 0, 0, 0, -1)) throw new Error('wasm refused the job');
   const mid = new Uint32Array(8);
-  const dv = new DataView(b.buffer, b.byteOffset, 32);
-  for (let i = 0; i < 8; i++) mid[i] = dv.getUint32(4 * i, true);
+  if (!KERNELS[m.name].full) {
+    if (!x.job_mid()) throw new Error('wasm has no midstate for ' + m.name);
+    const dv = new DataView(b.buffer, b.byteOffset, 32);
+    for (let i = 0; i < 8; i++) mid[i] = dv.getUint32(4 * i, true);
+  }
   job = { key: m.key, name: m.name, header: m.header, target: m.target, mid, next: m.start, end: m.end };
   if (!looping) loop();
 }
@@ -96,16 +111,18 @@ async function loop() {
       break;
     }
     const g = await pipeline(j.name);
-    const per = groups * 256 * ITERS;
+    const iters = g.lanes ? g.iters : ITERS;
+    const wg = g.kernel.wg || 256;
+    const per = g.lanes ? g.lanes * iters : groups * 256 * ITERS;
     const limit = Math.min(per, left);
-    device.queue.writeBuffer(g.uni, 0, params(g.kernel, j.mid, j.header, j.target, j.next, limit, ITERS));
+    device.queue.writeBuffer(g.uni, 0, params(g.kernel, j.mid, j.header, j.target, j.next, limit, iters));
     device.queue.writeBuffer(g.res, 0, zero);
     const t0 = performance.now();
     const enc = device.createCommandEncoder();
     const pass = enc.beginComputePass();
     pass.setPipeline(g.pipe);
     pass.setBindGroup(0, g.bind);
-    pass.dispatchWorkgroups(Math.ceil(limit / (256 * ITERS)));
+    pass.dispatchWorkgroups(Math.ceil(limit / (wg * iters)));
     pass.end();
     enc.copyBufferToBuffer(g.res, 0, g.read, 0, 65 * 4);
     device.queue.submit([enc.finish()]);
@@ -134,6 +151,7 @@ async function loop() {
       // this device is the pool's to raise.
       if (out[0] > 64) {
         groups = Math.max(1, groups >> 2);
+        g.iters = Math.max(1, g.iters >> 2);
         self.postMessage({ type: 'overflow', key: j.key, hits: out[0] });
       }
     }
@@ -141,6 +159,9 @@ async function loop() {
     self.postMessage({ type: 'progress', key: j.key, hashes: limit, found });
     if (out && out[0] > 32) {
       // Near the slot limit: grow no further, whatever the timing says.
+    } else if (g.lanes) {
+      if (dt < 60 && g.iters < 1024) g.iters *= 2;
+      else if (dt > 160 && g.iters > 1) g.iters >>= 1;
     } else if (dt < 60 && groups < 65535) groups = Math.min(65535, groups * 2);
     else if (dt > 160 && groups > 1) groups = Math.max(1, groups >> 1);
     const rest = duty >= 1 ? 0 : (dt * (1 - duty)) / duty;

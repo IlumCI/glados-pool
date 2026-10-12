@@ -35,45 +35,60 @@ const result = await page.evaluate(async () => {
   if (!adapter) return { error: 'no adapter' };
   const device = await adapter.requestDevice();
   const out = [];
-  const COUNT = 256 * 16 * 8; // 32768 nonces
-  const BASE = 2 ** 32 - COUNT; // the last range, ending exactly at the wrap
-  for (const name of ['sha256d', 'blake2s']) {
+  // sha256d and blake2s: 32,768 nonces at 1 in 64. neoscrypt is ~10^5 times
+  // costlier per nonce and SwiftShader runs it on the CPU, so 512 at 1 in 8.
+  const CASES = [
+    { name: 'sha256d', count: 32768, step: 1024, top: 0x03 },
+    { name: 'blake2s', count: 32768, step: 1024, top: 0x03 },
+    { name: 'neoscrypt', count: 512, step: 128, top: 0x1f },
+  ];
+  for (const { name, count: COUNT, step: STEP, top } of CASES) {
+    const BASE = 2 ** 32 - COUNT; // the last range, ending exactly at the wrap
     const header = Uint8Array.from({ length: 80 }, (_, i) => (i * 13 + name.length) & 255);
     const target = new Uint8Array(32).fill(0xff);
-    target[0] = 0x03; // ~1 in 64
+    target[0] = top;
     io().set(header, 0);
     io().set(target, 80);
-    if (!x.job_set(P.ALGO[name], 0, 0, 0, -1) || !x.job_mid()) return { error: 'wasm refused ' + name };
-    const dv = new DataView(io().buffer, io().byteOffset, 32);
-    const mid = Uint32Array.from({ length: 8 }, (_, i) => dv.getUint32(4 * i, true));
+    const k = KERNELS[name];
+    if (!x.job_set(P.ALGO[name], 0, 0, 0, -1)) return { error: 'wasm refused ' + name };
+    const mid = new Uint32Array(8);
+    if (!k.full) {
+      if (!x.job_mid()) return { error: 'no midstate for ' + name };
+      const dv = new DataView(io().buffer, io().byteOffset, 32);
+      for (let i = 0; i < 8; i++) mid[i] = dv.getUint32(4 * i, true);
+    }
     // wasm's answer, nonce by nonce.
     const want = [];
     for (let n = BASE; n < 2 ** 32; n++) {
       x.hash_one(n >>> 0);
       if (P.belowTarget(io().slice(0, 32), target)) want.push(n >>> 0);
     }
-    // The kernel's, in dispatches small enough that 64 result slots cannot overflow.
-    const k = KERNELS[name];
     const module = device.createShaderModule({ code: k.wgsl });
     const info = await module.getCompilationInfo();
     const err = info.messages.find((m) => m.type === 'error');
     if (err) return { error: `${name}: ${err.message} line ${err.lineNum}` };
     const pipe = await device.createComputePipelineAsync({ layout: 'auto', compute: { module, entryPoint: 'main' } });
-    const uni = device.createBuffer({ size: 96, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+    const uni = device.createBuffer({ size: k.full ? 128 : 96, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
     const res = device.createBuffer({ size: 260, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST });
     const read = device.createBuffer({ size: 260, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
-    const bind = device.createBindGroup({ layout: pipe.getBindGroupLayout(0), entries: [{ binding: 0, resource: { buffer: uni } }, { binding: 1, resource: { buffer: res } }] });
+    const wg = k.wg || 256;
+    const iters = k.scratch ? 1 : 16;
+    const entries = [{ binding: 0, resource: { buffer: uni } }, { binding: 1, resource: { buffer: res } }];
+    if (k.scratch) {
+      const sb = device.createBuffer({ size: STEP * k.scratch * 4, usage: GPUBufferUsage.STORAGE });
+      entries.push({ binding: 2, resource: { buffer: sb } });
+    }
+    const bind = device.createBindGroup({ layout: pipe.getBindGroupLayout(0), entries });
     const got = [];
     let overflow = false;
-    const STEP = 1024; // ~16 hits expected, far under the 64 slots
     for (let base = BASE; base < 2 ** 32; base += STEP) {
-      device.queue.writeBuffer(uni, 0, params(k, mid, header, target, base, STEP, 16));
+      device.queue.writeBuffer(uni, 0, params(k, mid, header, target, base, STEP, iters));
       device.queue.writeBuffer(res, 0, new Uint32Array(65));
       const enc = device.createCommandEncoder();
       const pass = enc.beginComputePass();
       pass.setPipeline(pipe);
       pass.setBindGroup(0, bind);
-      pass.dispatchWorkgroups(1); // 256 invocations x 16 iters covers 4096 >= STEP
+      pass.dispatchWorkgroups(Math.ceil(STEP / (wg * iters)));
       pass.end();
       enc.copyBufferToBuffer(res, 0, read, 0, 260);
       device.queue.submit([enc.finish()]);
@@ -85,7 +100,7 @@ const result = await page.evaluate(async () => {
     }
     got.sort((a, b) => a - b);
     const same = got.length === want.length && got.every((v, i) => v === want[i]);
-    out.push({ name, want: want.length, got: got.length, same, overflow });
+    out.push({ name, want: want.length, got: got.length, same, overflow, min: Math.max(8, COUNT / 512) });
   }
   const info = adapter.info || {};
   return { adapter: `${info.vendor} ${info.architecture}`, out };
@@ -98,7 +113,7 @@ if (result.error) {
 } else {
   console.log('     adapter: ' + result.adapter);
   for (const r of result.out) {
-    const ok = r.same && !r.overflow && r.want > 100;
+    const ok = r.same && !r.overflow && r.want > r.min;
     if (!ok) failed++;
     console.log(`${ok ? 'ok  ' : 'FAIL'} ${r.name}: kernel found ${r.got}, wasm found ${r.want}, identical sets: ${r.same}, overflow: ${r.overflow}`);
   }

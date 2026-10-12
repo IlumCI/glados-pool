@@ -89,6 +89,19 @@ fn out(h: &[u32; 8]) -> [u8; 32] {
     o
 }
 
+/// Keyed BLAKE2s-256 of one 64-byte block under a 32-byte key: the PRF
+/// NeoScrypt's FastKDF calls. The key, zero-padded to 64 bytes, is the first
+/// block and the message the second and final one (RFC 7693, section 3.3).
+pub fn keyed_64(input: &[u8], key: &[u8]) -> [u8; 32] {
+    let mut h = IV;
+    h[0] ^= 0x0101_2020; // digest 32, key 32, fanout 1, depth 1
+    let mut kb = [0u8; 64];
+    kb[..32].copy_from_slice(&key[..32]);
+    compress(&mut h, &kb, 64, false);
+    compress(&mut h, input[..64].try_into().unwrap(), 128, true);
+    out(&h)
+}
+
 pub struct Blake2sHeader {
     mid: [u32; 8],
     tail: [u8; 16],

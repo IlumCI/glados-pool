@@ -3,10 +3,17 @@
 
 import * as P from './proto.js';
 
-const AGENT = 'glados-web/0.2';
+const AGENT = 'glados-web/0.3';
+
+// Submits per second, kept under the bridge's per-connection bucket (10/s,
+// burst 40) so a burst of shares queues here instead of getting the
+// connection closed there. A real pool's VarDiff keeps a worker far below
+// this; it matters on a fresh connection before difficulty has adjusted.
+const SUBMIT_RATE = 8;
+const QUEUE_MAX = 256;
 
 // The algorithms the GPU worker has kernels for (kernels.js).
-const GPU_ALGOS = new Set(['sha256d', 'blake2s']);
+const GPU_ALGOS = new Set(['sha256d', 'blake2s', 'neoscrypt']);
 
 export class Miner {
   constructor({ bridge, wasm, threads, gpu }) {
@@ -27,6 +34,7 @@ export class Miner {
     this.jobs = new Map(); // slot -> parsed job
     this.exhausted = new Map(); // job key -> workers done
     this.pending = new Map(); // submit id -> nonce
+    this.queue = []; // shares waiting for the submit pacer
     this.nextId = 2;
     this.retry = 1000;
     this.stats = { hashes: 0, rate: 0, cpuRate: 0, gpuRate: 0, found: 0, accepted: 0, rejected: 0, bad: 0, slots: [] };
@@ -60,6 +68,7 @@ export class Miner {
     for (let i = 0; i < this.threads; i++) this.workers.push(spawn('./worker.js', 'cpu'));
     if (this.useGpu) this.gpu = spawn('./gpu-worker.js', 'gpu');
     this.tick = setInterval(() => this.sample(), 1000);
+    this.pacer = setInterval(() => this.drain(), 1000 / SUBMIT_RATE);
     this.connect();
     this.log(`${this.threads} CPU thread(s), ${this.wasm.includes('simd') ? 'SIMD' : 'baseline'} build`);
   }
@@ -67,6 +76,7 @@ export class Miner {
   stop() {
     if (!this.running) return;
     clearInterval(this.tick);
+    clearInterval(this.pacer);
     clearTimeout(this.reconnect);
     for (const s of this.workers) s.w.terminate();
     if (this.gpu) this.gpu.w.terminate();
@@ -95,6 +105,7 @@ export class Miner {
     ws.onmessage = (e) => this.fromPool(e.data);
     ws.onclose = (e) => {
       if (this.ws !== ws || !this.running) return;
+      this.stats.disconnects = (this.stats.disconnects || 0) + 1;
       this.log(`disconnected${e.reason ? ': ' + e.reason : ''}, retrying in ${this.retry / 1000} s`, 'warn');
       this.jobs.clear();
       this.plan();
@@ -266,9 +277,25 @@ export class Miner {
     // A share for a job the pool has replaced is stale; it would only be refused.
     if (!j || j.job !== id) return;
     this.stats.found++;
-    const sid = this.nextId++;
-    this.pending.set(sid, nonce);
-    this.send(P.submit(sid, j.job, nonce, j.echo));
+    if (this.queue.length >= QUEUE_MAX) {
+      this.queue.shift();
+      this.stats.dropped = (this.stats.dropped || 0) + 1;
+    }
+    this.queue.push({ slot, id, nonce });
+  }
+
+  /** One queued share per tick, skipping any whose job has been replaced. */
+  drain() {
+    if (!this.ws || this.ws.readyState !== 1) return;
+    while (this.queue.length) {
+      const q = this.queue.shift();
+      const j = this.jobs.get(q.slot);
+      if (!j || j.job !== q.id) continue; // stale now; it would only be refused
+      const sid = this.nextId++;
+      this.pending.set(sid, q.nonce);
+      this.send(P.submit(sid, j.job, q.nonce, j.echo));
+      return;
+    }
   }
 
   sample() {

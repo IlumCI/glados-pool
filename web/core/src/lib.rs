@@ -15,6 +15,7 @@
 //! byte-reversed digest must not exceed.
 
 pub mod blake2s;
+pub mod neoscrypt;
 pub mod sha256;
 pub mod yespower;
 
@@ -25,6 +26,7 @@ use yespower::Yespower;
 pub const ALGO_SHA256D: u32 = 1;
 pub const ALGO_BLAKE2S: u32 = 2;
 pub const ALGO_YESPOWER: u32 = 3;
+pub const ALGO_NEOSCRYPT: u32 = 4;
 
 /// Where the page writes a job: header at 0, target at 80, personalisation
 /// at 112. Results come back in the same buffer: found nonces from 512.
@@ -37,6 +39,7 @@ enum Hasher {
     Sha256d(Sha256d),
     Blake2s(Blake2sHeader),
     Yespower(Box<Yespower>, [u8; 80]),
+    Neoscrypt(Box<neoscrypt::Neoscrypt>, [u8; 80]),
 }
 
 impl Hasher {
@@ -47,6 +50,10 @@ impl Hasher {
             Hasher::Yespower(y, header) => {
                 header[76..80].copy_from_slice(&nonce.to_le_bytes());
                 y.hash(header)
+            }
+            Hasher::Neoscrypt(ns, header) => {
+                header[76..80].copy_from_slice(&nonce.to_le_bytes());
+                ns.hash(header)
             }
         }
     }
@@ -75,6 +82,7 @@ impl Job {
             ALGO_SHA256D => Hasher::Sha256d(Sha256d::new(header)),
             ALGO_BLAKE2S => Hasher::Blake2s(Blake2sHeader::new(header)),
             ALGO_YESPOWER => Hasher::Yespower(Box::new(Yespower::new(v10, n, r, pers.map(|p| p.to_vec())).ok()?), *header),
+            ALGO_NEOSCRYPT => Hasher::Neoscrypt(Box::default(), *header),
             _ => return None,
         };
         Some(Job { hasher, target: *target })

@@ -7,7 +7,7 @@
 //   nonce   submitted as 8 hex digits, big-endian
 //   algo    a structure, never a name: yespower carries v10, n, r and hex pers
 
-export const ALGO = { sha256d: 1, blake2s: 2, yespower: 3 };
+export const ALGO = { sha256d: 1, blake2s: 2, yespower: 3, neoscrypt: 4 };
 
 // Which device class an algorithm belongs on. yespower is built to resist
 // GPUs; the rest are GPU or ASIC work, where a browser CPU earns nothing worth
@@ -43,7 +43,9 @@ export function parseJob(p) {
     const pers = a.pers === undefined || a.pers === null ? null : unhex(a.pers);
     if (a.pers != null && !pers) return { error: 'yespower pers is not hex' };
     algo = { id: ALGO.yespower, name, v10: a.v10, n: a.n, r: a.r, pers };
-  } else if (name === 'sha256d' || name === 'blake2s') {
+  } else if (name === 'sha256d' || name === 'blake2s' || name === 'neoscrypt') {
+    // A bare name is the whole algorithm for these: NeoScrypt's N, r and
+    // rounds are its profile rather than settings a pool could vary.
     algo = { id: ALGO[name], name, v10: false, n: 0, r: 0, pers: null };
   }
   return {

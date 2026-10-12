@@ -176,3 +176,50 @@ fn native_rate() {
     for i in 0..400u32 { y.hash(&i.to_le_bytes()); }
     println!("native yespower 1.0 N=2048 r=8: {:.0} H/s", 400.0 / t.elapsed().as_secs_f64());
 }
+
+fn nbits_target(nbits: u32) -> [u8; 32] {
+    // Compact form: exponent in the top byte, 3-byte mantissa, big-endian out.
+    let exp = (nbits >> 24) as usize;
+    let mant = nbits & 0x00ff_ffff;
+    let mut t = [0u8; 32];
+    for (i, b) in mant.to_be_bytes()[1..].iter().enumerate() {
+        t[32 - exp + i] = *b;
+    }
+    t
+}
+
+/// Two Feathercoin blocks the network accepted. The digests are recomputed
+/// here, and separately each must beat the target in its own header's nbits,
+/// which is what makes a block a vector nobody here chose.
+#[test]
+fn neoscrypt_feathercoin_blocks() {
+    use glados_web_core::{below_target, neoscrypt::Neoscrypt};
+    let cases = [
+        (
+            "02000000 54aa94a46a70931d29f2a2ed3ee4ab5832cd6446a090f6f63292d004dd306e96 bca6f3f22928ee4aa468ed5d5ff0f0a31137c2f9e780e0a70411a4a39b98d91c 1b364d54 dcdd3d1d 52660400",
+            "aac8eaaea3c756f584d884f2de9e0e8c401f3ba0a640a14221550d2d06000000",
+        ),
+        (
+            "04000020 0a9245b1198825ab30d6dbae2b185e31f342d1058cc36851629bf435fc682b55 4d100771e4a23d210cd3a1503e3b1ca524e8482913ee5b4036edf4bd20db6a29 93c0a16a dc09011d 002c5f48",
+            "ff87010b15afee123759c6cb14fe33078d1795ca6f39286c3566d52500000000",
+        ),
+    ];
+    for (h, want) in cases {
+        let header: [u8; 80] = hex(h).try_into().unwrap();
+        let d = Neoscrypt::default().hash(&header);
+        assert_eq!(d.to_vec(), hex(want), "digest of {}", &h[..20]);
+        let nbits = u32::from_le_bytes(header[72..76].try_into().unwrap());
+        assert!(below_target(&d, &nbits_target(nbits)), "beats its own nbits {nbits:08x}");
+    }
+}
+
+/// RFC 7693's keyed BLAKE2s KAT (blake2s-kat.txt): key 00..1f, message 00..3f.
+#[test]
+fn blake2s_keyed_kat() {
+    let key: Vec<u8> = (0..32).collect();
+    let msg: Vec<u8> = (0..64).collect();
+    assert_eq!(
+        glados_web_core::blake2s::keyed_64(&msg, &key).to_vec(),
+        hex("8975b0577fd35566d750b362b0897a26c399136df07bababbde6203ff2954ed4")
+    );
+}

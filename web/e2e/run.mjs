@@ -55,7 +55,7 @@ let jobSeq = 0;
 const jobs = new Map(); // id -> { algo, header, target }
 function makeJob(slot, algo) {
   const id = 'j' + ++jobSeq;
-  const j = { id, slot, algo, header: header(jobSeq), target: algo.name === 'sha256d' ? HARD : EASY };
+  const j = { id, slot, algo, header: header(jobSeq), target: algo.name === 'sha256d' || algo.name === 'blake2s' ? HARD : EASY };
   jobs.set(id, j);
   return j;
 }
@@ -66,14 +66,16 @@ const jobMsg = (j) =>
   }) + '\n';
 
 const YES = { name: 'yespower', v10: true, n: 2048, r: 8 };
-const SHA = { name: 'sha256d' };
+// E2E_GPU_ALGO=neoscrypt offers NeoScrypt as the GPU-class slot instead.
+const GPU_ALGO = process.env.E2E_GPU_ALGO || 'sha256d';
+const SHA = { name: GPU_ALGO };
 const seen = { hello: null, submits: 0, verified: 0, wrongSlot: 0, badEcho: 0, workAsks: 0, bySlot: { 1: 0, 2: 0 } };
 
 function verify(j, nonceHex) {
   const nonce = parseInt(nonceHex, 16) >>> 0;
   io().set(unhex(j.header), 0);
   io().set(unhex(j.target), 80);
-  const algo = j.algo.name === 'yespower' ? 3 : 1;
+  const algo = { yespower: 3, sha256d: 1, blake2s: 2, neoscrypt: 4 }[j.algo.name];
   x.job_set(algo, j.algo.v10 ? 1 : 0, j.algo.n || 0, j.algo.r || 0, -1);
   x.hash_one(nonce);
   const d = io().slice(0, 32);
@@ -119,7 +121,7 @@ await new Promise((r) => pool.listen(POOL_PORT, '127.0.0.1', r));
 const children = [];
 const run = (cmd, args) => {
   const c = spawn(cmd, args, { stdio: ['ignore', 'ignore', 'pipe'] });
-  c.stderr.on('data', () => {});
+  c.stderr.on('data', (d) => process.env.E2E_VERBOSE && process.stderr.write('[' + path.basename(cmd) + '] ' + d));
   children.push(c);
   return c;
 };
@@ -150,6 +152,8 @@ const rate = `CPU ${await page.textContent('#s-cpu')}, GPU ${await page.textCont
 const slots = await page.textContent('#s-slots');
 console.log(`     page: ${rate}, ${accepted} accepted, ${rejected} rejected; ${slots}`);
 
+const disconnects = await page.evaluate(() => [...document.querySelectorAll('#log div')].filter((d) => d.textContent.includes('disconnected')).length);
+claim(disconnects === 0, `the page paces its submits and the bridge never cut it off (${disconnects} disconnects)`);
 claim(seen.hello?.worker === ADDRESS, 'the hello carries the payout address as the worker');
 claim(accepted >= 3, `the browser found and the pool accepted shares (${accepted})`);
 claim(seen.verified === seen.submits && seen.submits > 0, `every submitted share meets its target on recompute (${seen.verified}/${seen.submits})`);
@@ -157,7 +161,7 @@ claim(rejected === 0, 'the page reports no rejections');
 claim(seen.wrongSlot === 0, 'every share names a job the pool issued');
 const gpu = /WebGPU (?!not)/.test(hwLine);
 claim(seen.bySlot[1] > 0, `the CPU mined the yespower slot (${seen.bySlot[1]} shares)`);
-if (gpu) claim(seen.bySlot[2] > 0, `the GPU mined the sha256d slot at the same time (${seen.bySlot[2]} shares)`);
+if (gpu) claim(seen.bySlot[2] > 0, `the GPU mined the ${GPU_ALGO} slot at the same time (${seen.bySlot[2]} shares)`);
 else claim(seen.bySlot[2] === 0, 'with no WebGPU, nothing was submitted for the GPU-class slot');
 claim(seen.badEcho === 0, 'echo travels back verbatim');
 claim(/CPU: testzeny/.test(slots) && (gpu ? /GPU: testbtc/.test(slots) : !/testbtc/.test(slots)), 'the page says which job each device is working');

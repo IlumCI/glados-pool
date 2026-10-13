@@ -38,8 +38,24 @@ self.onmessage = async (e) => {
   }
 };
 
+// Detached from the message handler: a wasm trap in scan() is a rejected
+// promise inside this worker, which never reaches the page's worker.onerror.
+// Measured before this existed: the worker went silent, no message at all,
+// and its share of the nonce space stopped being searched. So it is caught
+// here and reported, and the page restarts the worker.
 async function loop() {
   looping = true;
+  try {
+    await mine();
+  } catch (err) {
+    job = null;
+    self.postMessage({ type: 'error', text: String(err?.message || err) });
+  } finally {
+    looping = false;
+  }
+}
+
+async function mine() {
   let batch = 4;
   while (job) {
     const j = job;
@@ -76,5 +92,4 @@ async function loop() {
     const rest = duty >= 1 ? 0 : (dt * (1 - duty)) / duty;
     await new Promise((r) => setTimeout(r, rest));
   }
-  looping = false;
 }

@@ -297,8 +297,11 @@ export class Miner {
     } else if (m.type === 'bad') {
       this.stats.bad++;
       this.log(`hash core and re-check disagree on ${P.nonceHex(m.nonce)}; dropped`, 'err');
+    } else if (m.type === 'error' && s.kind === 'cpu') {
+      // A CPU worker reporting its own failure (a wasm trap) is a crash.
+      this.crashed(s, m.text);
     } else if (m.type === 'lost' || m.type === 'error') {
-      // The GPU is gone; the CPU path does not depend on it.
+      // The GPU is gone or cannot run this; the CPU path does not depend on it.
       if (s.kind === 'gpu') s.dead = true;
       this.log(`GPU ${m.type === 'lost' ? 'device lost' : 'error'}: ${m.text}; CPU mining continues`, 'err');
     } else if (m.type === 'overflow') {

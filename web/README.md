@@ -45,3 +45,4 @@ slot.
 | `E2E_CHAOS=1 e2e/run.mjs` | a hostile pool: bad JSON, bad headers, a 2 GiB yespower job, unknown algorithm, a 200-job flood, a 1 MiB line, a dropped connection |
 | `GPU_FUZZ=n e2e/gpu.mjs` | every kernel against the wasm scan on random headers and nonce ranges |
 | `stress/load.mjs` | 1,000 bridge connections at 2 msg/s for 20 s |
+| `e2e/faults.mjs` | the real workers with one thing broken: a GPU that refuses the scratch buffer (shrink until it fits; or report it), a wasm that traps (report it, restart) |

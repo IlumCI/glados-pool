@@ -173,3 +173,14 @@ test('a job the page cannot run safely is refused and leaves workers on safe wor
   assert.ok(m.workers.every((s) => s.key === '1:a'), 'still on the job it had');
   m.stop();
 });
+
+test('a CPU worker that reports its own failure is restarted like a crash', async () => {
+  const { m, ws, logs } = await started(1, false);
+  ws.serverSays(jobMsg(1, 'a', 'yespower'));
+  const s = m.workers[0];
+  s.w.emit({ type: 'error', text: 'RuntimeError: unreachable' });
+  await tick();
+  assert.notEqual(m.workers[0], s);
+  assert.ok(logs.some((l) => /CPU worker crashed \(RuntimeError: unreachable\), restarting/.test(l)));
+  assert.equal(m.workers[0].w.lastJob()?.key, '1:a');
+});

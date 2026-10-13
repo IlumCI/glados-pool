@@ -116,8 +116,23 @@ function setJob(m) {
   if (!looping) loop();
 }
 
+// The loop runs detached from the message handler, so its failures --
+// a scratch buffer the device cannot hold, a shader that does not compile --
+// are caught here or nowhere. Uncaught, the loop died silently and `looping`
+// stayed true, so no later job could ever start it again.
 async function loop() {
   looping = true;
+  try {
+    await mine();
+  } catch (err) {
+    job = null;
+    self.postMessage({ type: 'error', text: String(err?.message || err) });
+  } finally {
+    looping = false;
+  }
+}
+
+async function mine() {
   const zero = new Uint32Array(65);
   while (job && device) {
     const j = job;
@@ -184,5 +199,4 @@ async function loop() {
     const rest = duty >= 1 ? 0 : (dt * (1 - duty)) / duty;
     await new Promise((r) => setTimeout(r, rest));
   }
-  looping = false;
 }

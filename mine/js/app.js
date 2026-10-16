@@ -25,6 +25,48 @@ function fmtRate(h) {
   return h.toFixed(h < 10 ? 2 : h < 100 ? 1 : 0) + ' ' + u[i];
 }
 
+// The payout assets, by the codes the pool knows (see the pool's reward menu):
+// the full name a miner reads, and the short ticker a revenue figure is in.
+const ASSETS = {
+  glados: ['$GLaDOS', 'GLaDOS'], nvda: ['NVIDIA', 'NVDA'], spcx: ['SpaceX', 'SPCX'],
+  googl: ['Alphabet', 'GOOGL'], amzn: ['Amazon', 'AMZN'], gme: ['GameStop', 'GME'],
+  spy: ['S&P 500', 'SPY'], chips: ['the Chips basket', 'chips'], os: ['the Big Tech basket', 'os'],
+  index: ['the Index basket', 'index'], metals: ['the Metals basket', 'metals'],
+};
+const assetName = (c) => (ASSETS[c] || ASSETS.glados)[0];
+
+let last = {}; // the most recent stats, so a reward change can re-render at once
+
+// The status line: for each device, the algorithm it is working and how fast,
+// at the current load. The coin the work is sold as is the pool's business,
+// not a per-device readout.
+function renderStatus(d) {
+  const el = document.getElementById('s-slots');
+  if (!miner.running) { el.textContent = 'Not mining.'; return; }
+  const slots = d.slots || [];
+  if (!slots.length) { el.textContent = 'Connected, waiting for a job.'; return; }
+  const load = document.getElementById('duty').value + '% load';
+  const of = (dev, rate) => {
+    const algos = [...new Set(slots.filter((s) => s.dev === dev).map((s) => s.algo))];
+    return algos.length ? `${dev} · ${algos.join(', ')} · ${fmtRate(rate)} · ${load}` : null;
+  };
+  el.textContent = [of('CPU', d.cpuRate), of('GPU', d.gpuRate)].filter(Boolean).join('\n');
+}
+
+// The asset the miner receives, and what their work so far is worth in it. The
+// revenue figure is an equal share of the pool's pot valued in the chosen
+// asset; the pool supplies it (stats.revenue). Shown as a dash until it does,
+// never invented here.
+function renderEarn(d) {
+  const code = document.getElementById('reward').value;
+  const [name, ticker] = ASSETS[code] || ASSETS.glados;
+  const rev = d && d.revenue;
+  document.getElementById('s-earn-val').textContent =
+    rev != null ? `${rev} ${ticker}` : '—';
+  document.getElementById('s-earn-cap').textContent =
+    `your mining revenue so far in ${name}, before power costs`;
+}
+
 const logEl = $('log');
 function log({ t, text, level }) {
   const line = document.createElement('div');
@@ -58,18 +100,26 @@ miner.on((kind, d) => {
     $('s-acc').textContent = d.accepted;
     $('s-rej').textContent = d.rejected;
     $('s-hashes').textContent = d.hashes.toLocaleString();
-    $('s-slots').textContent = miner.running
-      ? d.slots.length ? 'Working ' + d.slots.join(', ') : 'Connected, waiting for a job.'
-      : 'Not mining.';
+    last = d;
+    renderStatus(d);
+    renderEarn(d);
   }
 });
 
 const addr = $('addr');
 const go = $('go');
 const duty = $('duty');
+const reward = $('reward');
 addr.value = store.get('address', '');
 duty.value = store.get('duty', 75);
+reward.value = store.get('reward', 'glados');
 $('duty-out').textContent = duty.value + '%';
+renderEarn(last);
+
+reward.onchange = () => {
+  store.set('reward', reward.value);
+  renderEarn(last);
+};
 
 duty.oninput = () => {
   $('duty-out').textContent = duty.value + '%';
@@ -90,7 +140,7 @@ go.onclick = async () => {
     if (c.warn) log({ t: Date.now(), text: c.warn, level: 'warn' });
     store.set('address', a);
     try {
-      await miner.start(a, duty.value / 100);
+      await miner.start(a, duty.value / 100, reward.value);
     } catch (e) {
       log({ t: Date.now(), text: e.message, level: 'err' });
     }
@@ -98,6 +148,7 @@ go.onclick = async () => {
   go.dataset.running = String(miner.running);
   go.textContent = miner.running ? 'Stop' : 'Start mining';
   addr.disabled = miner.running;
+  reward.disabled = miner.running;
 };
 
 // A background tab is throttled by the browser; say so rather than let the

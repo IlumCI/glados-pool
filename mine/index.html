@@ -33,15 +33,21 @@
   section { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px; margin-bottom: 16px; }
   label { display: block; font-size: 13px; color: var(--muted); margin-bottom: 6px; }
   input[type=text] { width: 100%; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--ink); font: 14px ui-monospace, monospace; }
+  select { width: 100%; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--ink); font: 14px system-ui, sans-serif; }
+  select:disabled { opacity: .6; }
+  label + select, input + label { margin-top: 12px; }
+  .earn { margin: 0 0 14px; font-size: 14px; color: var(--muted); }
+  .earn b { display: block; font: 600 34px/1.1 system-ui, sans-serif; letter-spacing: -0.02em; color: var(--ink); }
   .row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-top: 12px; }
   button { padding: 10px 18px; border: 0; border-radius: 8px; background: var(--accent); color: #fff; font: 600 14px system-ui, sans-serif; cursor: pointer; }
   button[data-running="true"] { background: var(--ink); color: var(--bg); }
   button:disabled { opacity: .5; cursor: not-allowed; }
   input[type=range] { flex: 1; min-width: 140px; accent-color: var(--accent); }
   .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; }
-  .stat b { display: block; font: 600 20px ui-monospace, monospace; font-variant-numeric: tabular-nums; }
+  .stat b { display: block; font: 600 18px ui-monospace, monospace; font-variant-numeric: tabular-nums; }
   .stat span { font-size: 12px; color: var(--muted); }
   .note { font-size: 13px; color: var(--muted); margin: 8px 0 0; }
+  #s-slots { white-space: pre-line; font: 13px ui-monospace, monospace; }
   #log { font: 12px/1.6 ui-monospace, monospace; max-height: 260px; overflow: auto; margin: 0; white-space: pre-wrap; word-break: break-word; }
   #log .warn { color: var(--warn); } #log .err { color: var(--err); }
   .hw { font: 13px ui-monospace, monospace; color: var(--muted); word-break: break-word; }
@@ -55,15 +61,29 @@
   <section>
     <label for="addr">Payout address (EVM, Robinhood Chain)</label>
     <input id="addr" type="text" placeholder="0x..." spellcheck="false" autocomplete="off">
+    <label for="reward">Payout asset</label>
+    <select id="reward">
+      <option value="glados">$GLaDOS</option>
+      <option value="nvda">NVIDIA — NVDA</option>
+      <option value="spcx">SpaceX — SPCX</option>
+      <option value="googl">Alphabet — GOOGL</option>
+      <option value="amzn">Amazon — AMZN</option>
+      <option value="gme">GameStop — GME</option>
+      <option value="spy">S&amp;P 500 — SPY</option>
+      <option value="chips">Basket — Chips</option>
+      <option value="os">Basket — Big Tech</option>
+      <option value="index">Basket — Index</option>
+      <option value="metals">Basket — Metals</option>
+    </select>
     <div class="row">
       <button id="go" type="button">Start mining</button>
       <label for="duty" style="margin:0">Load <output id="duty-out">75%</output></label>
       <input id="duty" type="range" min="10" max="100" step="5" value="75">
     </div>
-    <p class="note">Shares are credited to this address. It is never sent anywhere except the pool.</p>
   </section>
 
   <section>
+    <p class="earn" id="s-earn"><b id="s-earn-val">—</b><span id="s-earn-cap">choose a payout asset and start mining</span></p>
     <div class="stats">
       <div class="stat"><b id="s-cpu">0 H/s</b><span>CPU hash rate</span></div>
       <div class="stat"><b id="s-gpu">-</b><span>GPU hash rate</span></div>

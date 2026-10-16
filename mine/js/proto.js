@@ -85,8 +85,8 @@ export function belowTarget(digest, target) {
 
 export const nonceHex = (n) => (n >>> 0).toString(16).padStart(8, '0');
 
-export const hello = (id, worker, agent) =>
-  JSON.stringify({ id, method: 'glados.hello', params: { v: 1, worker, agent } });
+export const hello = (id, worker, agent, reward) =>
+  JSON.stringify({ id, method: 'glados.hello', params: reward ? { v: 1, worker, agent, reward } : { v: 1, worker, agent } });
 
 export const submit = (id, job, nonce, echo) =>
   JSON.stringify({ id, method: 'glados.submit', params: { job, nonce: nonceHex(nonce), echo } });

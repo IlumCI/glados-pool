@@ -185,7 +185,12 @@ claim(seen.bySlot[1] > 0, `the CPU mined the yespower slot (${seen.bySlot[1]} sh
 if (gpu) claim(seen.bySlot[2] > 0, `the GPU mined the ${GPU_ALGO} slot at the same time (${seen.bySlot[2]} shares)`);
 else claim(seen.bySlot[2] === 0, 'with no WebGPU, nothing was submitted for the GPU-class slot');
 claim(seen.badEcho === 0, 'echo travels back verbatim');
-claim(/CPU: testzeny/.test(slots) && (gpu ? /GPU: testbtc/.test(slots) : !/testbtc/.test(slots)), 'the page says which job each device is working');
+claim(
+  /CPU · yespower/.test(slots) &&
+    !/testzeny|testbtc/.test(slots) &&
+    (gpu ? new RegExp(`GPU · ${GPU_ALGO}`).test(slots) : !/GPU ·/.test(slots)),
+  'the status shows each device’s algorithm and never the coin it is sold as',
+);
 claim(consoleErrors.length === 0, `no page errors${consoleErrors.length ? ': ' + consoleErrors[0] : ''}`);
 
 await page.click('#go');

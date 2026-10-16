@@ -405,11 +405,176 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
   }
 }`;
 
+// HeavyHash (Optical Bitcoin): SHA3-256 of the header, a 64x64 nibble matrix
+// applied to that digest, SHA3-256 again. The matrix depends only on the
+// previous block hash, so the wasm builds it once per job (job_matrix) and the
+// worker uploads it to binding 2; the kernel just reads it. Keccak-f[1600]'s
+// 64-bit lanes are vec2<u32>(lo, hi), since WGSL has no u64.
+//
+// The round constants are generated here from the same u64 list the Rust core
+// and proto.js keccak use, rather than transcribed by hand into 48 words.
+const KECCAK_RC = [
+  0x0000000000000001n, 0x0000000000008082n, 0x800000000000808an, 0x8000000080008000n, 0x000000000000808bn,
+  0x0000000080000001n, 0x8000000080008081n, 0x8000000000008009n, 0x000000000000008an, 0x0000000000000088n,
+  0x0000000080008009n, 0x000000008000000an, 0x000000008000808bn, 0x800000000000008bn, 0x8000000000008089n,
+  0x8000000000008003n, 0x8000000000008002n, 0x8000000000000080n, 0x000000000000800an, 0x800000008000000an,
+  0x8000000080008081n, 0x8000000000008080n, 0x0000000080000001n, 0x8000000080008008n,
+];
+const KECCAK_ROT = [1, 3, 6, 10, 15, 21, 28, 36, 45, 55, 2, 14, 27, 41, 56, 8, 25, 43, 62, 18, 39, 61, 20, 44];
+const KECCAK_PI = [10, 7, 11, 17, 18, 3, 5, 16, 8, 21, 24, 4, 15, 23, 19, 13, 12, 2, 20, 14, 22, 9, 6, 1];
+const rcPair = (x) => `vec2<u32>(${u(Number(x & 0xffffffffn))}, ${u(Number(x >> 32n))})`;
+const uarr = (name, len, vals) => `const ${name} = array<u32, ${len}>(${vals.map((v) => v + 'u').join(', ')});`;
+
+const HEAVYHASH = /* wgsl */ `
+struct Params {
+  header: array<vec4<u32>, 5>,
+  tgt: array<vec4<u32>, 2>,
+  base: u32, limit: u32, iters: u32, pad: u32,
+};
+@group(0) @binding(0) var<uniform> p: Params;
+@group(0) @binding(1) var<storage, read_write> res: array<atomic<u32>, 65>;
+@group(0) @binding(2) var<storage, read> mat: array<u32, 1024>;
+
+const RC = array<vec2<u32>, 24>(${KECCAK_RC.map(rcPair).join(', ')});
+${uarr('ROT', 24, KECCAK_ROT)}
+${uarr('PI', 24, KECCAK_PI)}
+
+fn tword(i: u32) -> u32 { return p.tgt[i / 4u][i % 4u]; }
+fn hword(w: u32, nonce: u32) -> u32 {
+  if (w == 19u) { return nonce; } // header's nonce field, bytes 76..79
+  return p.header[w / 4u][w % 4u];
+}
+// The matrix is one nibble per byte, four bytes a word, so m[i][j] is a byte
+// of the storage buffer at 64*i + j.
+fn mnib(i: u32, j: u32) -> u32 {
+  let n = i * 64u + j;
+  return (mat[n >> 2u] >> (8u * (n & 3u))) & 0xfu;
+}
+
+// 64-bit left rotate over (lo, hi). r is 1..62 here: never 0 or 32, where a
+// 32-bit shift would be a no-op under WGSL's modulo-32 shift count.
+fn rotl(v: vec2<u32>, r: u32) -> vec2<u32> {
+  if (r < 32u) {
+    return vec2<u32>((v.x << r) | (v.y >> (32u - r)), (v.y << r) | (v.x >> (32u - r)));
+  }
+  let s = r - 32u;
+  return vec2<u32>((v.y << s) | (v.x >> (32u - s)), (v.x << s) | (v.y >> (32u - s)));
+}
+
+fn keccak_f(st: ptr<function, array<vec2<u32>, 25>>) {
+  for (var r = 0u; r < 24u; r++) {
+    // Theta
+    var bc: array<vec2<u32>, 5>;
+    for (var i = 0u; i < 5u; i++) {
+      bc[i] = (*st)[i] ^ (*st)[i + 5u] ^ (*st)[i + 10u] ^ (*st)[i + 15u] ^ (*st)[i + 20u];
+    }
+    for (var i = 0u; i < 5u; i++) {
+      let t = bc[(i + 4u) % 5u] ^ rotl(bc[(i + 1u) % 5u], 1u);
+      for (var j = 0u; j < 25u; j += 5u) { (*st)[j + i] = (*st)[j + i] ^ t; }
+    }
+    // Rho and Pi, one loop carrying the displaced lane.
+    var t = (*st)[1];
+    for (var i = 0u; i < 24u; i++) {
+      let j = PI[i];
+      let held = (*st)[j];
+      (*st)[j] = rotl(t, ROT[i]);
+      t = held;
+    }
+    // Chi
+    for (var j = 0u; j < 25u; j += 5u) {
+      var row: array<vec2<u32>, 5>;
+      for (var i = 0u; i < 5u; i++) { row[i] = (*st)[j + i]; }
+      for (var i = 0u; i < 5u; i++) {
+        (*st)[j + i] = row[i] ^ (~row[(i + 1u) % 5u] & row[(i + 2u) % 5u]);
+      }
+    }
+    // Iota
+    (*st)[0] = (*st)[0] ^ RC[r];
+  }
+}
+
+@compute @workgroup_size(256)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+  for (var it = 0u; it < p.iters; it++) {
+    let off = gid.x * p.iters + it;
+    if (off >= p.limit) { return; }
+    let nonce = p.base + off;
+
+    // SHA3-256 of the 80-byte header: ten lanes of header, then the pad --
+    // 0x06 after the message and 0x80 at the end of the 136-byte rate. The
+    // state is zeroed explicitly every iteration: the unwritten capacity lanes
+    // must start at zero, and a loop-scoped var is not reliably re-initialised
+    // between iterations of the per-invocation nonce loop.
+    var st: array<vec2<u32>, 25>;
+    for (var i = 0u; i < 25u; i++) { st[i] = vec2<u32>(0u, 0u); }
+    for (var l = 0u; l < 10u; l++) { st[l] = vec2<u32>(hword(2u * l, nonce), hword(2u * l + 1u, nonce)); }
+    st[10] = vec2<u32>(0x06u, 0u);
+    st[16] = vec2<u32>(0u, 0x80000000u);
+    keccak_f(&st);
+    var h1: array<u32, 8>;
+    for (var i = 0u; i < 4u; i++) { h1[2u * i] = st[i].x; h1[2u * i + 1u] = st[i].y; }
+
+    // The 64 nibbles of h1, high nibble of each byte first.
+    var v: array<u32, 64>;
+    for (var k = 0u; k < 32u; k++) {
+      let b = (h1[k / 4u] >> (8u * (k % 4u))) & 0xffu;
+      v[2u * k] = b >> 4u;
+      v[2u * k + 1u] = b & 0xfu;
+    }
+    // x = h1 XOR the matrix product, packed back a nibble at a time. Each sum
+    // is at most 64*15*15 = 14,400, so >>10 is below 16 without a mask. Zeroed
+    // before the packing OR builds each word.
+    var xw: array<u32, 8>;
+    for (var i = 0u; i < 8u; i++) { xw[i] = 0u; }
+    for (var k = 0u; k < 32u; k++) {
+      var acc0 = 0u;
+      var acc1 = 0u;
+      for (var j = 0u; j < 64u; j++) {
+        acc0 += mnib(2u * k, j) * v[j];
+        acc1 += mnib(2u * k + 1u, j) * v[j];
+      }
+      let hb = (h1[k / 4u] >> (8u * (k % 4u))) & 0xffu;
+      let xb = hb ^ (((acc0 >> 10u) << 4u) | (acc1 >> 10u));
+      xw[k / 4u] |= xb << (8u * (k % 4u));
+    }
+
+    // SHA3-256 again: four lanes of x, then the pad. Zeroed for the same
+    // reason as the first state.
+    var st2: array<vec2<u32>, 25>;
+    for (var i = 0u; i < 25u; i++) { st2[i] = vec2<u32>(0u, 0u); }
+    for (var l = 0u; l < 4u; l++) { st2[l] = vec2<u32>(xw[2u * l], xw[2u * l + 1u]); }
+    st2[4] = vec2<u32>(0x06u, 0u);
+    st2[16] = vec2<u32>(0u, 0x80000000u);
+    keccak_f(&st2);
+    var d: array<u32, 8>;
+    for (var i = 0u; i < 4u; i++) { d[2u * i] = st2[i].x; d[2u * i + 1u] = st2[i].y; }
+
+    // Little-endian digest: the integer's most significant word is d[7].
+    var c: array<u32, 8>;
+    for (var i = 0u; i < 8u; i++) { c[i] = d[7u - i]; }
+    var hit = true;
+    for (var i = 0u; i < 8u; i++) {
+      let tg = tword(i);
+      if (c[i] != tg) { hit = c[i] < tg; break; }
+    }
+    if (hit) {
+      let slot = atomicAdd(&res[0], 1u);
+      if (slot < 64u) { atomicStore(&res[slot + 1u], nonce); }
+    }
+  }
+}`;
+
 export const KERNELS = {
   sha256d: { wgsl: SHA256D, tailBigEndian: true },
   blake2s: { wgsl: BLAKE2S, tailBigEndian: false },
   // scratch: words of storage each invocation owns; wg: workgroup size.
   neoscrypt: { wgsl: NEOSCRYPT, scratch: 8192, wg: 64, full: true },
+  // matrix: a per-job storage binding the worker uploads from job_matrix.
+  // start: the first dispatch probes small, since each nonce is two
+  // keccak-f[1600]s and a 64x64 matrix multiply -- hundreds of times a
+  // sha256d nonce -- so a groups=64 opening dispatch would blow past the
+  // GPU's watchdog. The worker's timing ramp grows it from here.
+  heavyhash: { wgsl: HEAVYHASH, full: true, matrix: true, start: 2 },
 };
 
 /** The uniform for one dispatch: 96 bytes, or 128 for a full-header kernel. */

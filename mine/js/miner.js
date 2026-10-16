@@ -15,7 +15,7 @@ const QUEUE_MAX = 256;
 const RESPAWNS = 3; // per worker slot, so a worker that crashes on every job cannot loop
 
 // The algorithms the GPU worker has kernels for (kernels.js).
-const GPU_ALGOS = new Set(['sha256d', 'blake2s', 'neoscrypt']);
+const GPU_ALGOS = new Set(['sha256d', 'blake2s', 'neoscrypt', 'heavyhash']);
 
 export class Miner {
   constructor({ bridge, wasm, threads, gpu }) {

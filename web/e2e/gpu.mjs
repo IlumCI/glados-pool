@@ -46,11 +46,13 @@ const result = await page.evaluate(async () => {
     { name: 'sha256d', count: 32768, step: 1024, top: 0x03, base: 2 ** 32 - 32768, fixed: true },
     { name: 'blake2s', count: 32768, step: 1024, top: 0x03, base: 2 ** 32 - 32768, fixed: true },
     { name: 'neoscrypt', count: 512, step: 128, top: 0x1f, base: 2 ** 32 - 512, fixed: true },
+    { name: 'heavyhash', count: 8192, step: 1024, top: 0x03, base: 2 ** 32 - 8192, fixed: true },
   ];
   for (let f = 0; f < FUZZ; f++) {
     CASES.push({ name: 'sha256d', count: 4096, step: 1024, top: 0x07, base: rnd() & ~4095 });
     CASES.push({ name: 'blake2s', count: 4096, step: 1024, top: 0x07, base: rnd() & ~4095 });
     if (f < 3) CASES.push({ name: 'neoscrypt', count: 128, step: 128, top: 0x3f, base: rnd() & ~127 });
+    if (f < 3) CASES.push({ name: 'heavyhash', count: 1024, step: 1024, top: 0x07, base: rnd() & ~1023 });
   }
   for (const { name, count: COUNT, step: STEP, top, base: BASE, fixed } of CASES) {
     const header = fixed
@@ -88,6 +90,12 @@ const result = await page.evaluate(async () => {
     if (k.scratch) {
       const sb = device.createBuffer({ size: STEP * k.scratch * 4, usage: GPUBufferUsage.STORAGE });
       entries.push({ binding: 2, resource: { buffer: sb } });
+    }
+    if (k.matrix) {
+      if (!x.job_matrix()) return { error: 'no matrix for ' + name };
+      const mb = device.createBuffer({ size: 1024 * 4, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
+      device.queue.writeBuffer(mb, 0, new Uint8Array(x.memory.buffer, x.matrix_ptr(), 1024 * 4).slice());
+      entries.push({ binding: 2, resource: { buffer: mb } });
     }
     const bind = device.createBindGroup({ layout: pipe.getBindGroupLayout(0), entries });
     const got = [];

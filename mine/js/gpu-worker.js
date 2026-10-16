@@ -87,6 +87,10 @@ async function pipeline(name) {
       lanes = Math.max(k.wg, (lanes >> 1) - ((lanes >> 1) % k.wg));
     }
   }
+  // A per-job matrix (HeavyHash): 1024 words, uploaded from the wasm when the
+  // job changes rather than rebuilt per dispatch, since it depends only on the
+  // previous block hash.
+  const matrix = k.matrix ? device.createBuffer({ size: 1024 * 4, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST }) : null;
   const uni = device.createBuffer({ size: uniSize, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
   const read = device.createBuffer({ size: 65 * 4, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
   const entries = [
@@ -94,8 +98,9 @@ async function pipeline(name) {
     { binding: 1, resource: { buffer: res } },
   ];
   if (scratch) entries.push({ binding: 2, resource: { buffer: scratch } });
+  if (matrix) entries.push({ binding: 2, resource: { buffer: matrix } });
   const bind = device.createBindGroup({ layout: pipe.getBindGroupLayout(0), entries });
-  const p = { kernel: k, pipe, uni, res, read, bind, lanes, iters: 1 };
+  const p = { kernel: k, pipe, uni, res, read, bind, lanes, iters: 1, matrix, loadedKey: null };
   pipes.set(name, p);
   return p;
 }
@@ -112,7 +117,19 @@ function setJob(m) {
     const dv = new DataView(b.buffer, b.byteOffset, 32);
     for (let i = 0; i < 8; i++) mid[i] = dv.getUint32(4 * i, true);
   }
-  job = { key: m.key, name: m.name, header: m.header, target: m.target, mid, next: m.start, end: m.end };
+  // A kernel with a matrix binding gets this job's matrix, built once in the
+  // wasm (job_matrix) and copied out before memory can move under us.
+  let matrix = null;
+  if (KERNELS[m.name].matrix) {
+    if (!x.job_matrix()) throw new Error('wasm gave no matrix for ' + m.name);
+    matrix = new Uint8Array(x.memory.buffer, x.matrix_ptr(), 1024 * 4).slice();
+  }
+  // An expensive kernel opens with a small dispatch so its first one cannot
+  // trip the GPU watchdog before the timing ramp has sized it; never grows
+  // the probe, only lowers it.
+  const probe = KERNELS[m.name].start;
+  if (probe) groups = Math.min(groups, probe);
+  job = { key: m.key, name: m.name, header: m.header, target: m.target, mid, matrix, next: m.start, end: m.end };
   if (!looping) loop();
 }
 
@@ -143,6 +160,10 @@ async function mine() {
       break;
     }
     const g = await pipeline(j.name);
+    if (g.matrix && g.loadedKey !== j.key) {
+      device.queue.writeBuffer(g.matrix, 0, j.matrix);
+      g.loadedKey = j.key;
+    }
     const iters = g.lanes ? g.iters : ITERS;
     const wg = g.kernel.wg || 256;
     const per = g.lanes ? g.lanes * iters : groups * 256 * ITERS;

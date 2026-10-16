@@ -2,6 +2,7 @@
 
 use glados_web_core::blake2s::{blake2s, Blake2sHeader};
 use glados_web_core::sha256::{sha256, Sha256d};
+use glados_web_core::sha3::sha3_256;
 use glados_web_core::yespower::Yespower;
 
 fn hex(s: &str) -> Vec<u8> {
@@ -211,6 +212,46 @@ fn neoscrypt_feathercoin_blocks() {
         let nbits = u32::from_le_bytes(header[72..76].try_into().unwrap());
         assert!(below_target(&d, &nbits_target(nbits)), "beats its own nbits {nbits:08x}");
     }
+}
+
+/// FIPS 202 SHA3-256, the function HeavyHash is built on. NIST's own vectors
+/// for the empty message and "abc", so nothing here chose its own answer.
+#[test]
+fn sha3_256_fips202() {
+    assert_eq!(sha3_256(b"").to_vec(), hex("a7ffc6f8bf1ed76651c14756a061d662f580ff4de43b49fa82d80a4b80f8434a"));
+    assert_eq!(sha3_256(b"abc").to_vec(), hex("3a985da74fe225b2045c172d6bd390bd855f086e3e9d525b46bfe24511431532"));
+}
+
+/// OBTC mainnet genesis, whose every header field is in obtc-core's
+/// `chainparams.cpp` and whose hash the node asserts at startup. Same block and
+/// negative controls as `GLaDOS/src/mine/heavyhash.rs::checks` and the oracle.
+#[test]
+fn heavyhash_obtc_genesis() {
+    use glados_web_core::heavyhash::Heavy;
+    // The genesis header, serialised: version 1, zero prev, the merkle root in
+    // display order, time, nbits 0x1c00ffff, nonce 1120945927.
+    let mut h = [0u8; 80];
+    h[0..4].copy_from_slice(&1i32.to_le_bytes());
+    let merkle = hex("c4a47847658174dff39f23e69c2246e7e611752884ceb600694a8619adbbfef5");
+    for i in 0..32 {
+        h[36 + i] = merkle[31 - i]; // display order reversed into the header
+    }
+    h[68..72].copy_from_slice(&1616765395u32.to_le_bytes());
+    h[72..76].copy_from_slice(&0x1c00ffffu32.to_le_bytes());
+    h[76..80].copy_from_slice(&1120945927u32.to_le_bytes());
+
+    // The hash the node asserts is the display (reversed) form; in memory order
+    // it is that reversed, which is what `hash` returns.
+    let mut want = hex("0000000000115c7a7e3ff65d77ee96de527953ca6e43e77246929741408f95c0");
+    want.reverse();
+
+    let hv = Heavy::new(&h);
+    assert_eq!(hv.hash(&h, 1120945927).to_vec(), want, "OBTC genesis hashes to its asserted hash");
+    assert_ne!(hv.hash(&h, 1120945928).to_vec(), want, "one nonce away is a different hash");
+    // The matrix step is not a no-op: SHA3 twice alone does not match.
+    assert_ne!(sha3_256(&sha3_256(&h)).to_vec(), want, "the matrix step changes the result");
+    // The matrix is nibbles.
+    assert!(hv.matrix().iter().all(|r| r.iter().all(|&x| x < 16)), "matrix is nibbles");
 }
 
 /// RFC 7693's keyed BLAKE2s KAT (blake2s-kat.txt): key 00..1f, message 00..3f.

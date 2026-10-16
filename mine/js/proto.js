@@ -10,7 +10,7 @@
 // Per-thread scratch cap for yespower: twice the largest real coin's 16 MiB.
 export const YESPOWER_MAX_BYTES = 32 * 2 ** 20;
 
-export const ALGO = { sha256d: 1, blake2s: 2, yespower: 3, neoscrypt: 4 };
+export const ALGO = { sha256d: 1, blake2s: 2, yespower: 3, neoscrypt: 4, heavyhash: 5 };
 
 // Which device class an algorithm belongs on. yespower is built to resist
 // GPUs; the rest are GPU or ASIC work, where a browser CPU earns nothing worth
@@ -54,9 +54,10 @@ export function parseJob(p) {
     if (a.pers != null && !pers) return { error: 'yespower pers is not hex' };
     if (pers && pers.length > 400) return { error: 'yespower pers is over 400 bytes' };
     algo = { id: ALGO.yespower, name, v10: a.v10, n: a.n, r: a.r, pers };
-  } else if (name === 'sha256d' || name === 'blake2s' || name === 'neoscrypt') {
+  } else if (name === 'sha256d' || name === 'blake2s' || name === 'neoscrypt' || name === 'heavyhash') {
     // A bare name is the whole algorithm for these: NeoScrypt's N, r and
-    // rounds are its profile rather than settings a pool could vary.
+    // rounds are its profile rather than settings a pool could vary, and
+    // HeavyHash's matrix comes from the header, so there is nothing to carry.
     algo = { id: ALGO[name], name, v10: false, n: 0, r: 0, pers: null };
   }
   return {

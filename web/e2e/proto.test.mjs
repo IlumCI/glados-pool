@@ -22,10 +22,20 @@ test('malformed headers and targets are refused', () => {
   assert.ok(P.parseJob(job({ slot: '1' })).error);
 });
 
-test('an algorithm this build cannot hash parses with a class and no algo', () => {
+test('heavyhash is a bare name in the GPU class and carries no parameters', () => {
   const j = P.parseJob(job({ algo: { name: 'heavyhash' } }));
   assert.equal(j.cls, 'gpu');
+  assert.equal(j.algo.id, P.ALGO.heavyhash);
+  assert.deepEqual([j.algo.v10, j.algo.n, j.algo.r, j.algo.pers], [false, 0, 0, null]);
+});
+
+test('an algorithm this build does not know parses with no class and no algo', () => {
+  // The graceful-degradation path: the pool names something this build cannot
+  // place or hash, so the controller warns and stays idle rather than crashing.
+  const j = P.parseJob(job({ algo: { name: 'equihash' } }));
+  assert.equal(j.cls, null);
   assert.equal(j.algo, null);
+  assert.equal(j.name, 'equihash');
 });
 
 test('ranges cover 2^32 exactly, contiguously, with no overlap', () => {

@@ -78,7 +78,7 @@ function verify(j, nonceHex) {
   const nonce = parseInt(nonceHex, 16) >>> 0;
   io().set(unhex(j.header), 0);
   io().set(unhex(j.target), 80);
-  const algo = { yespower: 3, sha256d: 1, blake2s: 2, neoscrypt: 4 }[j.algo.name];
+  const algo = { yespower: 3, sha256d: 1, blake2s: 2, neoscrypt: 4, heavyhash: 5 }[j.algo.name];
   x.job_set(algo, j.algo.v10 ? 1 : 0, j.algo.n || 0, j.algo.r || 0, -1);
   x.hash_one(nonce);
   const d = io().slice(0, 32);

@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| `core/` | yespower 0.5/1.0, SHA-256d, BLAKE2s in Rust for wasm32, checked against published vectors |
+| `core/` | yespower 0.5/1.0, SHA-256d, BLAKE2s, NeoScrypt, HeavyHash (SHA3-256) in Rust for wasm32, checked against published vectors |
 | `../mine/` | the page GitHub Pages serves at `/mine/`, and the built `.wasm` it loads |
 | `../bridge/` | WebSocket to the pool's line protocol |
 | `e2e/` | protocol unit tests, and a headless-Chromium run against a fake pool |
@@ -27,13 +27,33 @@ Locally: `python3 -m http.server 8000` at the repo root, a bridge with
 
 CPU and GPU mine at the same time on different jobs: the CPU takes CPU-class
 work (yespower), the GPU takes GPU-class work it has a kernel for (sha256d,
-blake2s, neoscrypt), one slot at a time, asking the pool for fresh work when a
-job's nonce space is spent. heavyhash is GPU-class with no kernel yet.
+blake2s, neoscrypt, heavyhash), one slot at a time, asking the pool for fresh
+work when a job's nonce space is spent.
 
 Submits are paced at 8 a second, under the bridge's per-connection bucket, so
 a burst of shares queues in the page instead of getting the connection closed.
 `E2E_GPU_ALGO=neoscrypt` runs the end-to-end test with NeoScrypt as the GPU
 slot.
+
+## The revenue feed
+
+The pool may push a fifth message, a notification with no id like `glados.job`:
+
+```
+<- {"method":"glados.earn","params":{"asset":"nvda","value":0.0123}}
+```
+
+It is the worker's accrued, unpaid revenue valued in the asset the pool is
+actually crediting. Under the equal split every worker takes the same share of
+the epoch's pot — the pot over the recipient count — and `value` is that share
+in `asset`; the pool holds the pot, the count and the USD→asset quote, so only
+it can produce the figure. The browser shows a dash until one arrives and
+never computes one. `value` is gross of the miner's own power cost and net of
+the pool's gas and swap, which leave the pot before it is split. `asset` is
+what is really being credited: a fallback to `$GLaDOS` says `glados` here, so
+the page names the truth rather than the request. The message is optional and
+resent as the figure moves; the client drops a malformed one and keeps the
+last good value (`proto.parseEarn`).
 
 ## Stress tests
 

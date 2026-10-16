@@ -15,11 +15,14 @@
 //! byte-reversed digest must not exceed.
 
 pub mod blake2s;
+pub mod heavyhash;
 pub mod neoscrypt;
 pub mod sha256;
+pub mod sha3;
 pub mod yespower;
 
 use blake2s::Blake2sHeader;
+use heavyhash::Heavy;
 use sha256::Sha256d;
 use yespower::Yespower;
 
@@ -27,6 +30,7 @@ pub const ALGO_SHA256D: u32 = 1;
 pub const ALGO_BLAKE2S: u32 = 2;
 pub const ALGO_YESPOWER: u32 = 3;
 pub const ALGO_NEOSCRYPT: u32 = 4;
+pub const ALGO_HEAVYHASH: u32 = 5;
 
 /// Where the page writes a job: header at 0, target at 80, personalisation
 /// at 112. Results come back in the same buffer: found nonces from 512.
@@ -40,6 +44,7 @@ enum Hasher {
     Blake2s(Blake2sHeader),
     Yespower(Box<Yespower>, [u8; 80]),
     Neoscrypt(Box<neoscrypt::Neoscrypt>, [u8; 80]),
+    HeavyHash(Box<Heavy>, [u8; 80]),
 }
 
 impl Hasher {
@@ -55,6 +60,8 @@ impl Hasher {
                 header[76..80].copy_from_slice(&nonce.to_le_bytes());
                 ns.hash(header)
             }
+            // The matrix is fixed for the job; only the nonce moves.
+            Hasher::HeavyHash(hv, header) => hv.hash(header, nonce),
         }
     }
 }
@@ -83,6 +90,7 @@ impl Job {
             ALGO_BLAKE2S => Hasher::Blake2s(Blake2sHeader::new(header)),
             ALGO_YESPOWER => Hasher::Yespower(Box::new(Yespower::new(v10, n, r, pers.map(|p| p.to_vec())).ok()?), *header),
             ALGO_NEOSCRYPT => Hasher::Neoscrypt(Box::default(), *header),
+            ALGO_HEAVYHASH => Hasher::HeavyHash(Box::new(Heavy::new(header)), *header),
             _ => return None,
         };
         Some(Job { hasher, target: *target })
@@ -110,6 +118,17 @@ impl Job {
 
 static mut IO: [u8; IO_LEN] = [0; IO_LEN];
 static mut JOB: Option<Job> = None;
+
+/// The HeavyHash matrix for the current job, one nibble per byte, for the GPU
+/// worker to upload. Its own buffer because it is 4 KiB and the IO buffer is
+/// 1 KiB; it is written by `job_matrix` and read through `matrix_ptr`.
+const MATRIX_LEN: usize = 64 * 64;
+static mut MATRIX: [u8; MATRIX_LEN] = [0; MATRIX_LEN];
+
+#[allow(static_mut_refs)]
+fn matrix_buf() -> &'static mut [u8; MATRIX_LEN] {
+    unsafe { &mut MATRIX }
+}
 
 #[allow(static_mut_refs)]
 fn io() -> &'static mut [u8; IO_LEN] {
@@ -181,5 +200,27 @@ pub extern "C" fn hash_one(nonce: u32) -> u32 {
     let Some(j) = job().as_mut() else { return 0 };
     let d = j.hash(nonce);
     io()[..32].copy_from_slice(&d);
+    1
+}
+
+/// The pointer the HeavyHash matrix is written at, read as 4096 bytes.
+#[unsafe(no_mangle)]
+pub extern "C" fn matrix_ptr() -> *mut u8 {
+    matrix_buf().as_mut_ptr()
+}
+
+/// Write the current job's HeavyHash matrix at `matrix_ptr()`, one nibble per
+/// byte in row-major order, so the GPU kernel reads `m[i][j]` at `64*i + j`.
+/// Answers 1 for a HeavyHash job, 0 for any other (there is no matrix to give).
+#[unsafe(no_mangle)]
+pub extern "C" fn job_matrix() -> u32 {
+    let Some(Hasher::HeavyHash(hv, _)) = job().as_ref().map(|j| &j.hasher) else {
+        return 0;
+    };
+    let m = hv.matrix();
+    let buf = matrix_buf();
+    for i in 0..64 {
+        buf[64 * i..64 * i + 64].copy_from_slice(&m[i]);
+    }
     1
 }

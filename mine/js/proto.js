@@ -10,7 +10,7 @@
 // Per-thread scratch cap for yespower: twice the largest real coin's 16 MiB.
 export const YESPOWER_MAX_BYTES = 32 * 2 ** 20;
 
-export const ALGO = { sha256d: 1, blake2s: 2, yespower: 3, neoscrypt: 4 };
+export const ALGO = { sha256d: 1, blake2s: 2, yespower: 3, neoscrypt: 4, heavyhash: 5 };
 
 // Which device class an algorithm belongs on. yespower is built to resist
 // GPUs; the rest are GPU or ASIC work, where a browser CPU earns nothing worth
@@ -54,9 +54,10 @@ export function parseJob(p) {
     if (a.pers != null && !pers) return { error: 'yespower pers is not hex' };
     if (pers && pers.length > 400) return { error: 'yespower pers is over 400 bytes' };
     algo = { id: ALGO.yespower, name, v10: a.v10, n: a.n, r: a.r, pers };
-  } else if (name === 'sha256d' || name === 'blake2s' || name === 'neoscrypt') {
+  } else if (name === 'sha256d' || name === 'blake2s' || name === 'neoscrypt' || name === 'heavyhash') {
     // A bare name is the whole algorithm for these: NeoScrypt's N, r and
-    // rounds are its profile rather than settings a pool could vary.
+    // rounds are its profile rather than settings a pool could vary, and
+    // HeavyHash's matrix comes from the header, so there is nothing to carry.
     algo = { id: ALGO[name], name, v10: false, n: 0, r: 0, pers: null };
   }
   return {
@@ -73,6 +74,32 @@ export function parseJob(p) {
   };
 }
 
+/**
+ * A `glados.earn`'s params, checked, or null. The miner's accrued, unpaid
+ * revenue valued in the asset the pool is actually crediting:
+ *
+ *   <- {"method":"glados.earn","params":{"asset":"nvda","value":0.0123}}
+ *
+ * Only the pool can produce this. Under the equal split every worker's share
+ * is the epoch's pot over the recipient count, and `value` is that share
+ * expressed in `asset`; the pool holds the pot, the count and the USD->asset
+ * quote, and the browser holds none of the three, so the figure is read from
+ * the wire and never computed here. It is gross of the miner's own power cost
+ * and net of the pool's gas and swap, which come out of the pot before it is
+ * split. `asset` is what is *really* being credited: if the chosen asset was
+ * blocked this epoch and the pool fell back to $GLaDOS, it says `glados` here,
+ * so the page can show the truth rather than the request. Optional and resent
+ * as the figure moves; a malformed one returns null and the page keeps the
+ * last good value rather than showing a wrong one.
+ */
+export function parseEarn(p) {
+  if (!p || typeof p !== 'object') return null;
+  const { asset, value } = p;
+  if (typeof asset !== 'string' || !asset) return null;
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) return null;
+  return { asset, value };
+}
+
 /** Whether a digest meets a big-endian target, read the way the pool reads it. */
 export function belowTarget(digest, target) {
   for (let i = 0; i < 32; i++) {
@@ -84,8 +111,8 @@ export function belowTarget(digest, target) {
 
 export const nonceHex = (n) => (n >>> 0).toString(16).padStart(8, '0');
 
-export const hello = (id, worker, agent) =>
-  JSON.stringify({ id, method: 'glados.hello', params: { v: 1, worker, agent } });
+export const hello = (id, worker, agent, reward) =>
+  JSON.stringify({ id, method: 'glados.hello', params: reward ? { v: 1, worker, agent, reward } : { v: 1, worker, agent } });
 
 export const submit = (id, job, nonce, echo) =>
   JSON.stringify({ id, method: 'glados.submit', params: { job, nonce: nonceHex(nonce), echo } });

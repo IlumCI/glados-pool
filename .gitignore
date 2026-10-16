@@ -1,0 +1,2 @@
+# Cloudflare Pages staging, assembled by deploy/pages-build.sh
+/dist/

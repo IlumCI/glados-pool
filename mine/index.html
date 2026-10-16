@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>GLaDOS Miner</title>
 <link rel="icon" href="data:,">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self'; connect-src 'self' wss://ws.aperture.institute ws://127.0.0.1:* ws://localhost:*; style-src 'unsafe-inline'; img-src data:; object-src 'none'; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self'; connect-src 'self' wss://ws.aperture.institute ws://127.0.0.1:* ws://localhost:* https://rpc.mainnet.chain.robinhood.com; style-src 'unsafe-inline'; img-src data:; object-src 'none'; base-uri 'none'; form-action 'none'">
 <meta name="description" content="Mine for the GLaDOS pool from a browser tab. Nothing runs until you press start.">
 <style>
   :root {
@@ -33,15 +33,24 @@
   section { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px; margin-bottom: 16px; }
   label { display: block; font-size: 13px; color: var(--muted); margin-bottom: 6px; }
   input[type=text] { width: 100%; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--ink); font: 14px ui-monospace, monospace; }
+  select { width: 100%; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--ink); font: 14px system-ui, sans-serif; }
+  select:disabled { opacity: .6; }
+  label + select, input + label { margin-top: 12px; }
+  .earn { margin: 0 0 14px; font-size: 14px; color: var(--muted); }
+  .earn b { display: block; font: 600 34px/1.1 system-ui, sans-serif; letter-spacing: -0.02em; color: var(--ink); }
   .row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-top: 12px; }
-  button { padding: 10px 18px; border: 0; border-radius: 8px; background: var(--accent); color: #fff; font: 600 14px system-ui, sans-serif; cursor: pointer; }
+  /* Dark label on the orange, not white: white on this accent is 3.6:1 in
+     light and 2.5:1 in dark, under WCAG AA; a near-black label is 4.8:1 and
+     6.9:1. The accent is mid-to-light in both themes, so one dark value serves. */
+  button { padding: 10px 18px; border: 0; border-radius: 8px; background: var(--accent); color: #1d1b16; font: 600 14px system-ui, sans-serif; cursor: pointer; }
   button[data-running="true"] { background: var(--ink); color: var(--bg); }
   button:disabled { opacity: .5; cursor: not-allowed; }
   input[type=range] { flex: 1; min-width: 140px; accent-color: var(--accent); }
   .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; }
-  .stat b { display: block; font: 600 20px ui-monospace, monospace; font-variant-numeric: tabular-nums; }
+  .stat b { display: block; font: 600 18px ui-monospace, monospace; font-variant-numeric: tabular-nums; }
   .stat span { font-size: 12px; color: var(--muted); }
   .note { font-size: 13px; color: var(--muted); margin: 8px 0 0; }
+  #s-slots { white-space: pre-line; font: 13px ui-monospace, monospace; }
   #log { font: 12px/1.6 ui-monospace, monospace; max-height: 260px; overflow: auto; margin: 0; white-space: pre-wrap; word-break: break-word; }
   #log .warn { color: var(--warn); } #log .err { color: var(--err); }
   .hw { font: 13px ui-monospace, monospace; color: var(--muted); word-break: break-word; }
@@ -50,20 +59,35 @@
 <body>
 <main>
   <h1>GLaDOS Miner</h1>
-  <p class="sub">Mines for the GLaDOS pool in this tab, on your CPU and, where the browser supports WebGPU, your graphics card. Nothing runs until you press start, and it stops when you close the tab.</p>
+  <p class="sub">Put your computer's spare power to work in this tab and get paid in what you choose below — a single stock, a basket of them, or $GLaDOS. It runs on your CPU and, where the browser allows, your graphics card. Nothing starts until you press start, and closing the tab stops it.</p>
 
   <section>
     <label for="addr">Payout address (EVM, Robinhood Chain)</label>
-    <input id="addr" type="text" placeholder="0x..." spellcheck="false" autocomplete="off">
+    <input id="addr" type="text" placeholder="0x000000000000000000000000000000000000dEaD" spellcheck="false" autocomplete="off">
+    <label for="reward">Payout asset</label>
+    <select id="reward">
+      <option value="glados">$GLaDOS</option>
+      <option value="nvda">NVIDIA — NVDA</option>
+      <option value="spcx">SpaceX — SPCX</option>
+      <option value="googl">Alphabet — GOOGL</option>
+      <option value="amzn">Amazon — AMZN</option>
+      <option value="gme">GameStop — GME</option>
+      <option value="spy">S&amp;P 500 — SPY</option>
+      <option value="chips">Basket — Chips</option>
+      <option value="os">Basket — Big Tech</option>
+      <option value="index">Basket — Index</option>
+      <option value="metals">Basket — Metals</option>
+    </select>
+    <p class="note" id="gate">Hold 1,000,000 $GLaDOS to unlock stock &amp; basket payouts. Enter your address to check.</p>
     <div class="row">
       <button id="go" type="button">Start mining</button>
       <label for="duty" style="margin:0">Load <output id="duty-out">75%</output></label>
       <input id="duty" type="range" min="10" max="100" step="5" value="75">
     </div>
-    <p class="note">Shares are credited to this address. It is never sent anywhere except the pool.</p>
   </section>
 
   <section>
+    <p class="earn" id="s-earn"><b id="s-earn-val">—</b><span id="s-earn-cap">choose a payout asset and start mining</span></p>
     <div class="stats">
       <div class="stat"><b id="s-cpu">0 H/s</b><span>CPU hash rate</span></div>
       <div class="stat"><b id="s-gpu">-</b><span>GPU hash rate</span></div>

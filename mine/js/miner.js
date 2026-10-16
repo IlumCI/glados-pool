@@ -15,7 +15,7 @@ const QUEUE_MAX = 256;
 const RESPAWNS = 3; // per worker slot, so a worker that crashes on every job cannot loop
 
 // The algorithms the GPU worker has kernels for (kernels.js).
-const GPU_ALGOS = new Set(['sha256d', 'blake2s', 'neoscrypt']);
+const GPU_ALGOS = new Set(['sha256d', 'blake2s', 'neoscrypt', 'heavyhash']);
 
 export class Miner {
   constructor({ bridge, wasm, threads, gpu }) {
@@ -56,11 +56,12 @@ export class Miner {
     this.emit('log', { t: Date.now(), text, level });
   }
 
-  async start(worker, duty) {
+  async start(worker, duty, reward) {
     if (this.running) return;
     if (!P.isAddress(worker)) throw new Error('a 0x address is needed: shares are credited to it');
     this.worker = worker;
     this.duty = duty;
+    this.reward = reward || 'glados';
     this.running = true;
     for (let i = 0; i < this.threads; i++) this.workers.push(this.spawn('./worker.js', 'cpu'));
     if (this.useGpu) this.gpu = this.spawn('./gpu-worker.js', 'gpu');
@@ -126,7 +127,7 @@ export class Miner {
     this.ws = ws;
     ws.onopen = () => {
       this.retry = 1000;
-      ws.send(P.hello(1, this.worker, AGENT));
+      ws.send(P.hello(1, this.worker, AGENT, this.reward));
     };
     ws.onmessage = (e) => this.fromPool(e.data);
     ws.onclose = (e) => {
@@ -164,6 +165,18 @@ export class Miner {
       if (j.error) return this.log('refused a job: ' + j.error, 'warn');
       this.jobs.set(j.slot, j);
       this.plan();
+      return;
+    }
+    if (m.method === 'glados.earn') {
+      // The pool's figure for this worker, valued in the asset it credits.
+      // A malformed one is ignored, leaving the last good value on the page
+      // rather than blanking it.
+      const e = P.parseEarn(m.params);
+      if (e) {
+        this.stats.revenue = e.value;
+        this.stats.asset = e.asset;
+        this.emit('stats', this.stats);
+      }
       return;
     }
     if (m.id === 1) {
@@ -226,8 +239,9 @@ export class Miner {
       if (s.key) this.post(s, { type: 'stop' });
       s.key = s.slot = null;
     }
-    this.stats.slots = cpu.map((j) => `CPU: ${j.coin || 'slot ' + j.slot} (${j.name} N=${j.algo.n} r=${j.algo.r})`);
-    if (gpuJob) this.stats.slots.push(`GPU: ${gpuJob.coin || 'slot ' + gpuJob.slot} (${gpuJob.name})`);
+    // Per device, the algorithm being worked -- not the coin it is sold as.
+    this.stats.slots = cpu.map((j) => ({ dev: 'CPU', algo: j.name }));
+    if (gpuJob) this.stats.slots.push({ dev: 'GPU', algo: gpuJob.name });
     this.emit('stats', this.stats);
   }
 

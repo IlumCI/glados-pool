@@ -1,0 +1,24 @@
+# Cloudflare Pages for this repository's static surface: the published record
+# and the browser miner. Pages, not a Worker -- there is no server here, only
+# files, and the one dynamic thing (index.html recomputing ledger.json's
+# digest) runs in the visitor's browser.
+#
+# Deploy a preview to the *.pages.dev name, which changes nothing about any
+# custom domain, with:
+#
+#     ./deploy/pages-build.sh
+#     npx wrangler pages deploy dist --project-name glados-pool
+#
+# The miner connects to wss://ws.aperture.institute (mine/index.html's CSP
+# allows exactly that and localhost); serving the page elsewhere does not
+# change where it dials. Pointing a custom domain at this is a separate,
+# deliberate step -- and if glados-pool is on GitHub Pages under a custom
+# domain, that domain has to be removed there first, since one hostname cannot
+# have two origins.
+name = "glados-pool"
+compatibility_date = "2026-10-16"
+
+# A staged directory rather than the repo root: the site is index.html,
+# ledger.json, shares.txt and mine/, not bridge/, web/ or the READMEs.
+# deploy/pages-build.sh assembles it; it is git-ignored.
+pages_build_output_dir = "dist"

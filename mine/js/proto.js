@@ -74,6 +74,32 @@ export function parseJob(p) {
   };
 }
 
+/**
+ * A `glados.earn`'s params, checked, or null. The miner's accrued, unpaid
+ * revenue valued in the asset the pool is actually crediting:
+ *
+ *   <- {"method":"glados.earn","params":{"asset":"nvda","value":0.0123}}
+ *
+ * Only the pool can produce this. Under the equal split every worker's share
+ * is the epoch's pot over the recipient count, and `value` is that share
+ * expressed in `asset`; the pool holds the pot, the count and the USD->asset
+ * quote, and the browser holds none of the three, so the figure is read from
+ * the wire and never computed here. It is gross of the miner's own power cost
+ * and net of the pool's gas and swap, which come out of the pot before it is
+ * split. `asset` is what is *really* being credited: if the chosen asset was
+ * blocked this epoch and the pool fell back to $GLaDOS, it says `glados` here,
+ * so the page can show the truth rather than the request. Optional and resent
+ * as the figure moves; a malformed one returns null and the page keeps the
+ * last good value rather than showing a wrong one.
+ */
+export function parseEarn(p) {
+  if (!p || typeof p !== 'object') return null;
+  const { asset, value } = p;
+  if (typeof asset !== 'string' || !asset) return null;
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) return null;
+  return { asset, value };
+}
+
 /** Whether a digest meets a big-endian target, read the way the pool reads it. */
 export function belowTarget(digest, target) {
   for (let i = 0; i < 32; i++) {

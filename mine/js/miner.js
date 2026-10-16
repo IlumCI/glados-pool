@@ -167,6 +167,18 @@ export class Miner {
       this.plan();
       return;
     }
+    if (m.method === 'glados.earn') {
+      // The pool's figure for this worker, valued in the asset it credits.
+      // A malformed one is ignored, leaving the last good value on the page
+      // rather than blanking it.
+      const e = P.parseEarn(m.params);
+      if (e) {
+        this.stats.revenue = e.value;
+        this.stats.asset = e.asset;
+        this.emit('stats', this.stats);
+      }
+      return;
+    }
     if (m.id === 1) {
       if (m.error) {
         // The pool's own words: a refused greeting says why.

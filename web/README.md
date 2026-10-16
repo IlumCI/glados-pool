@@ -35,6 +35,26 @@ a burst of shares queues in the page instead of getting the connection closed.
 `E2E_GPU_ALGO=neoscrypt` runs the end-to-end test with NeoScrypt as the GPU
 slot.
 
+## The revenue feed
+
+The pool may push a fifth message, a notification with no id like `glados.job`:
+
+```
+<- {"method":"glados.earn","params":{"asset":"nvda","value":0.0123}}
+```
+
+It is the worker's accrued, unpaid revenue valued in the asset the pool is
+actually crediting. Under the equal split every worker takes the same share of
+the epoch's pot — the pot over the recipient count — and `value` is that share
+in `asset`; the pool holds the pot, the count and the USD→asset quote, so only
+it can produce the figure. The browser shows a dash until one arrives and
+never computes one. `value` is gross of the miner's own power cost and net of
+the pool's gas and swap, which leave the pot before it is split. `asset` is
+what is really being credited: a fallback to `$GLaDOS` says `glados` here, so
+the page names the truth rather than the request. The message is optional and
+resent as the figure moves; the client drops a malformed one and keeps the
+last good value (`proto.parseEarn`).
+
 ## Stress tests
 
 | | |

@@ -38,6 +38,18 @@ test('an algorithm this build does not know parses with no class and no algo', (
   assert.equal(j.name, 'equihash');
 });
 
+test('an earn figure parses, and a malformed one is dropped not shown', () => {
+  assert.deepEqual(P.parseEarn({ asset: 'nvda', value: 0.0123 }), { asset: 'nvda', value: 0.0123 });
+  assert.deepEqual(P.parseEarn({ asset: 'glados', value: 0 }), { asset: 'glados', value: 0 });
+  assert.equal(P.parseEarn({ asset: 'nvda', value: '0.0123' }), null, 'value must be a number, not a string');
+  assert.equal(P.parseEarn({ asset: 'nvda', value: -1 }), null, 'a negative revenue is nonsense');
+  assert.equal(P.parseEarn({ asset: 'nvda', value: Infinity }), null);
+  assert.equal(P.parseEarn({ asset: 'nvda', value: NaN }), null);
+  assert.equal(P.parseEarn({ value: 1 }), null, 'no asset, no figure');
+  assert.equal(P.parseEarn({ asset: '', value: 1 }), null);
+  assert.equal(P.parseEarn(null), null);
+});
+
 test('ranges cover 2^32 exactly, contiguously, with no overlap', () => {
   for (const k of [1, 3, 7, 15]) {
     const r = P.ranges(k);

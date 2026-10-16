@@ -53,18 +53,28 @@ function renderStatus(d) {
   el.textContent = [of('CPU', d.cpuRate), of('GPU', d.gpuRate)].filter(Boolean).join('\n');
 }
 
+// A money-ish amount: more fraction digits the smaller it is, so a fraction of
+// a share still reads as a number instead of rounding to 0.
+function fmtAmount(v) {
+  const abs = Math.abs(v);
+  const digits = abs === 0 ? 0 : abs >= 1000 ? 0 : abs >= 1 ? 2 : abs >= 0.01 ? 4 : 6;
+  return v.toLocaleString(undefined, { maximumFractionDigits: digits });
+}
+
 // The asset the miner receives, and what their work so far is worth in it. The
-// revenue figure is an equal share of the pool's pot valued in the chosen
-// asset; the pool supplies it (stats.revenue). Shown as a dash until it does,
-// never invented here.
+// revenue figure is an equal share of the pool's pot valued in that asset; the
+// pool supplies it (stats.revenue), shown as a dash until it does and never
+// invented here. The asset named is the one the pool is actually crediting
+// (stats.asset) when it has said, so a fallback to $GLaDOS shows truthfully;
+// before the first figure, the one chosen in the form.
 function renderEarn(d) {
-  const code = document.getElementById('reward').value;
+  const code = (d && d.asset) || document.getElementById('reward').value;
   const [name, ticker] = ASSETS[code] || ASSETS.glados;
   const rev = d && d.revenue;
-  document.getElementById('s-earn-val').textContent =
-    rev != null ? `${rev} ${ticker}` : '—';
-  document.getElementById('s-earn-cap').textContent =
-    `your mining revenue so far in ${name}, before power costs`;
+  document.getElementById('s-earn-val').textContent = rev != null ? `${fmtAmount(rev)} ${ticker}` : '—';
+  document.getElementById('s-earn-cap').textContent = rev != null
+    ? `your mining revenue so far in ${name}, before power costs`
+    : `your mining revenue in ${name} shows here once the pool reports it`;
 }
 
 const logEl = $('log');

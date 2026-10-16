@@ -112,6 +112,10 @@ const pool = net.createServer((sock) => {
         }
         sock.write(jobMsg(makeJob(1, YES)));
         sock.write(jobMsg(makeJob(2, SHA)));
+        // The revenue feed: the pool values this worker's share of the pot in
+        // the asset it credits (here NVDA, whatever the page asked for) and
+        // pushes it. Only the pool can; the browser holds none of the inputs.
+        sock.write(JSON.stringify({ method: 'glados.earn', params: { asset: 'nvda', value: 0.0123 } }) + '\n');
       } else if (m.method === 'glados.submit') {
         seen.submits++;
         const j = jobs.get(m.params.job);
@@ -164,7 +168,10 @@ const accepted = Number(await page.textContent('#s-acc'));
 const rejected = Number(await page.textContent('#s-rej'));
 const rate = `CPU ${await page.textContent('#s-cpu')}, GPU ${await page.textContent('#s-gpu')}`;
 const slots = await page.textContent('#s-slots');
+const earnVal = (await page.textContent('#s-earn-val')).trim();
+const earnCap = (await page.textContent('#s-earn-cap')).trim();
 console.log(`     page: ${rate}, ${accepted} accepted, ${rejected} rejected; ${slots}`);
+console.log(`     earn: ${earnVal} — ${earnCap}`);
 
 const disconnects = await page.evaluate(() => [...document.querySelectorAll('#log div')].filter((d) => d.textContent.includes('disconnected')).length);
 if (!CHAOS) claim(disconnects === 0, `the page paces its submits and the bridge never cut it off (${disconnects} disconnects)`);
@@ -190,6 +197,10 @@ claim(
     !/testzeny|testbtc/.test(slots) &&
     (gpu ? new RegExp(`GPU · ${GPU_ALGO}`).test(slots) : !/GPU ·/.test(slots)),
   'the status shows each device’s algorithm and never the coin it is sold as',
+);
+claim(
+  /0\.0123/.test(earnVal) && /NVDA/.test(earnVal) && /NVIDIA/.test(earnCap),
+  `the earning line shows the pool's reported revenue in the asset it credits (${earnVal})`,
 );
 claim(consoleErrors.length === 0, `no page errors${consoleErrors.length ? ': ' + consoleErrors[0] : ''}`);
 

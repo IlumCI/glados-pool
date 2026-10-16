@@ -3,6 +3,7 @@
 import { detect, cpuThreads } from './hw.js';
 import { Miner } from './miner.js';
 import { bridgeUrl, checkAddress } from './proto.js';
+import { gladosWei, whole, GATE_WEI, GATE_WHOLE } from './gate.js';
 
 // ?bridge=ws://127.0.0.1:8080 points the page at a local bridge for testing.
 // Only a local address is honoured; see proto.bridgeUrl.
@@ -126,10 +127,60 @@ reward.value = store.get('reward', 'glados');
 $('duty-out').textContent = duty.value + '%';
 renderEarn(last);
 
+// The holding gate, reflected on the controls. Stock and basket payouts are
+// locked until the address is shown to hold 1,000,000 $GLaDOS; under that, the
+// miner is paid in $GLaDOS (what the pool does regardless). A failed balance
+// read does not lock a real holder out: it leaves the choice open with the
+// requirement named, since the pool is the authority either way.
+const gradeFmt = (wei) => whole(wei).toLocaleString();
+let gateSeq = 0; // the latest address wins; a slow read for an old one is dropped
+
+function applyGate(wei) {
+  const holder = wei != null && wei >= GATE_WEI;
+  const unread = wei == null;
+  for (const opt of reward.options) if (opt.value !== 'glados') opt.disabled = !holder && !unread;
+  if (!holder && !unread && reward.value !== 'glados') {
+    reward.value = 'glados';
+    store.set('reward', 'glados');
+    renderEarn(last);
+  }
+  const g = $('gate');
+  if (holder) g.textContent = `You hold ${gradeFmt(wei)} $GLaDOS — stock & basket payouts unlocked.`;
+  else if (unread) g.textContent = `Stock & basket payouts need 1,000,000 $GLaDOS. Couldn't check your balance just now; under that you're paid in $GLaDOS.`;
+  else g.textContent = `You hold ${gradeFmt(wei)} of ${GATE_WHOLE.toLocaleString()} $GLaDOS — mining $GLaDOS until you reach it. Top up to unlock instantly.`;
+}
+
+async function checkGate(a) {
+  const seq = ++gateSeq;
+  $('gate').textContent = 'Checking your $GLaDOS balance…';
+  const wei = await gladosWei(a);
+  if (seq !== gateSeq) return; // a newer address was entered meanwhile
+  applyGate(wei);
+}
+
+// Locked until an address proves the holding; this is the first thing a
+// newcomer sees, so the progression is legible before anything is typed.
+function lockRwa() {
+  for (const opt of reward.options) if (opt.value !== 'glados') opt.disabled = true;
+  $('gate').textContent = 'Hold 1,000,000 $GLaDOS to unlock stock & basket payouts. Enter your address to check.';
+}
+
 reward.onchange = () => {
   store.set('reward', reward.value);
   renderEarn(last);
 };
+
+addr.oninput = () => {
+  clearTimeout(addr._t);
+  const a = addr.value.trim();
+  if (!checkAddress(a).ok) { lockRwa(); return; }
+  addr._t = setTimeout(() => checkGate(a), 400); // debounced: one read, not one a keystroke
+};
+
+// On load: locked, then checked at once if an address was remembered, so a
+// returning holder sees their choices open without retyping.
+lockRwa();
+if (checkAddress(addr.value.trim()).ok) checkGate(addr.value.trim());
 
 duty.oninput = () => {
   $('duty-out').textContent = duty.value + '%';

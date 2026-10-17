@@ -10,6 +10,15 @@ import { gladosWei, whole, GATE_WEI, GATE_WHOLE } from './gate.js';
 // live edge-worker pool, which speaks the same protocol at /mine.
 const BRIDGE = bridgeUrl(new URLSearchParams(location.search).get('bridge'), 'wss://pool.aperture.institute/mine');
 
+// The pool's HTTP origin, from the same host the miner dials: wss -> https,
+// ws -> http, the /mine path dropped. Used read-only for /payouts.json, so a
+// returning miner sees whether a distribution has ever included their address.
+function poolHttpBase(wss) {
+  try { const u = new URL(wss); u.protocol = u.protocol === 'wss:' ? 'https:' : 'http:'; return u.origin; }
+  catch { return null; }
+}
+const POOL_HTTP = poolHttpBase(BRIDGE);
+
 const $ = (id) => document.getElementById(id);
 const store = {
   get(k, d) {
@@ -84,6 +93,58 @@ function renderEarn(d) {
   document.getElementById('s-earn-cap').textContent = `your mining revenue so far in ${name}, before power costs`;
 }
 
+// A rough "N minutes/hours ago" from a timestamp in ms.
+function agoText(ts) {
+  const s = Math.max(0, Math.round((Date.now() - ts) / 1000));
+  if (s < 90) return 'just now';
+  const m = Math.round(s / 60);
+  if (m < 90) return `${m} min ago`;
+  const h = Math.round(m / 60);
+  return h < 36 ? `${h} h ago` : `${Math.round(h / 24)} d ago`;
+}
+
+// The payout facts the pool sends with the revenue figure: how many miners the
+// last distribution split between, the cadence, and when it last paid. Shown
+// only once the pool reports them (while connected); never invented here.
+function renderPayout(d) {
+  const el = document.getElementById('s-payout-live');
+  if (!d || d.epochMs == null) { el.style.display = 'none'; return; }
+  el.style.display = '';
+  const parts = [];
+  if (d.recipients > 0) parts.push(`last round split among ${d.recipients} miner${d.recipients === 1 ? '' : 's'}`);
+  parts.push(`distributions run about every ${Math.max(1, Math.round(d.epochMs / 60000))} min`);
+  parts.push(d.lastAt ? `last one ${agoText(d.lastAt)}` : 'none have run yet');
+  const s = parts.join(' · ');
+  el.textContent = s.charAt(0).toUpperCase() + s.slice(1) + '.';
+}
+
+// Whether any distribution has ever paid the entered address, read from the
+// pool's own /payouts.json. The latest address wins, as with the gate check.
+let paidSeq = 0;
+async function fetchPaid(a) {
+  const el = document.getElementById('s-paid');
+  if (!POOL_HTTP) { el.textContent = ''; return; }
+  const seq = ++paidSeq;
+  el.textContent = 'Checking your payout history…';
+  try {
+    const r = await fetch(POOL_HTTP + '/payouts.json', { cache: 'no-store' });
+    if (!r.ok) throw new Error('http ' + r.status);
+    const { epochs } = await r.json();
+    if (seq !== paidSeq) return; // a newer address was entered meanwhile
+    const lc = a.toLowerCase();
+    const all = Array.isArray(epochs) ? epochs : [];
+    const mine = all.filter((e) => Array.isArray(e.recipients) && e.recipients.includes(lc));
+    if (!all.length) { el.textContent = 'No distribution has run yet — you could be in one of the pool’s first rounds.'; return; }
+    if (!mine.length) { el.textContent = `No distribution has included you yet (${all.length} so far). You’re paid once your work clears a round’s floor.`; return; }
+    const lastPaid = mine[0]; // /payouts.json is newest-first, so the first match is the most recent
+    const when = typeof lastPaid.at === 'number' ? ` · most recent ${agoText(lastPaid.at)}` : '';
+    el.textContent = `Paid in ${mine.length} of the last ${all.length} distributions${when}.`;
+  } catch {
+    if (seq !== paidSeq) return;
+    el.textContent = ''; // the pool is the authority; say nothing rather than guess
+  }
+}
+
 const logEl = $('log');
 function log({ t, text, level }) {
   const line = document.createElement('div');
@@ -120,6 +181,7 @@ miner.on((kind, d) => {
     last = d;
     renderStatus(d);
     renderEarn(d);
+    renderPayout(d);
   }
 });
 
@@ -164,11 +226,17 @@ async function checkGate(a) {
   applyGate(wei);
 }
 
+// The gate and the payout history are both read off a valid address, so a
+// newcomer sees what they'd be paid in and whether they've ever been paid.
+function checkAddr(a) { checkGate(a); fetchPaid(a); }
+
 // Locked until an address proves the holding; this is the first thing a
 // newcomer sees, so the progression is legible before anything is typed.
 function lockRwa() {
   for (const opt of reward.options) if (opt.value !== 'glados') opt.disabled = true;
   $('gate').textContent = 'Hold 1,000,000 $GLaDOS to unlock stock & basket payouts. Enter your address to check.';
+  paidSeq++; // drop any in-flight payout lookup for an old address
+  $('s-paid').textContent = '';
 }
 
 reward.onchange = () => {
@@ -180,13 +248,13 @@ addr.oninput = () => {
   clearTimeout(addr._t);
   const a = addr.value.trim();
   if (!checkAddress(a).ok) { lockRwa(); return; }
-  addr._t = setTimeout(() => checkGate(a), 400); // debounced: one read, not one a keystroke
+  addr._t = setTimeout(() => checkAddr(a), 400); // debounced: one read, not one a keystroke
 };
 
 // On load: locked, then checked at once if an address was remembered, so a
-// returning holder sees their choices open without retyping.
+// returning holder sees their choices open and their payout history without retyping.
 lockRwa();
-if (checkAddress(addr.value.trim()).ok) checkGate(addr.value.trim());
+if (checkAddress(addr.value.trim()).ok) checkAddr(addr.value.trim());
 
 duty.oninput = () => {
   $('duty-out').textContent = duty.value + '%';

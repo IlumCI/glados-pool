@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>GLaDOS Miner</title>
 <link rel="icon" href="data:,">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self'; connect-src 'self' wss://pool.aperture.institute ws://127.0.0.1:* ws://localhost:* https://rpc.mainnet.chain.robinhood.com; style-src 'unsafe-inline'; img-src data:; object-src 'none'; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self'; connect-src 'self' wss://pool.aperture.institute https://pool.aperture.institute ws://127.0.0.1:* ws://localhost:* http://127.0.0.1:* http://localhost:* https://rpc.mainnet.chain.robinhood.com; style-src 'unsafe-inline'; img-src data:; object-src 'none'; base-uri 'none'; form-action 'none'">
 <meta name="description" content="Mine for the GLaDOS pool from a browser tab. Nothing runs until you press start.">
 <style>
   :root {
@@ -51,6 +51,9 @@
   .stat span { font-size: 12px; color: var(--muted); }
   .note { font-size: 13px; color: var(--muted); margin: 8px 0 0; }
   #s-slots { white-space: pre-line; font: 13px ui-monospace, monospace; }
+  .payout-help { margin-top: 8px; }
+  .payout-help summary { font-size: 13px; color: var(--muted); cursor: pointer; }
+  .payout-help .note { margin-top: 4px; }
   #log { font: 12px/1.6 ui-monospace, monospace; max-height: 260px; overflow: auto; margin: 0; white-space: pre-wrap; word-break: break-word; }
   #log .warn { color: var(--warn); } #log .err { color: var(--err); }
   .hw { font: 13px ui-monospace, monospace; color: var(--muted); word-break: break-word; }
@@ -96,6 +99,12 @@
       <div class="stat"><b id="s-hashes">0</b><span>hashes this session</span></div>
     </div>
     <p class="note" id="s-slots">Not mining.</p>
+    <p class="note" id="s-payout-live" style="display:none"></p>
+    <p class="note" id="s-paid"></p>
+    <details class="payout-help">
+      <summary>How you get paid</summary>
+      <p class="note">Your work is pooled with every other miner's, sold on the open market, and the proceeds are split equally among miners about every 30 minutes. You're paid once your work clears that round's floor; anything under it carries to the next round. There's no fixed "shares per cent" — your work's value floats with live market rates, so the figure above is the honest measure. New pools also batch proceeds before the first swap, so the very first payout can take a while.</p>
+    </details>
   </section>
 
   <section>

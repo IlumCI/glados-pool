@@ -196,6 +196,11 @@ export class Miner {
       if (e) {
         this.stats.revenue = e.value;
         this.stats.asset = e.asset;
+        // Payout facts, when the pool sends them; left as-is otherwise so a
+        // message without them never erases what the page already shows.
+        if (e.recipients !== undefined) this.stats.recipients = e.recipients;
+        if (e.epochMs !== undefined) this.stats.epochMs = e.epochMs;
+        if (e.lastAt !== undefined) this.stats.lastAt = e.lastAt;
         this.emit('stats', this.stats);
       }
       return;

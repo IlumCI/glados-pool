@@ -97,7 +97,15 @@ export function parseEarn(p) {
   const { asset, value } = p;
   if (typeof asset !== 'string' || !asset) return null;
   if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) return null;
-  return { asset, value };
+  // The pool may also send payout facts: how many miners the last distribution
+  // split between, the cadence in ms, and when it last paid. Each is kept only
+  // when it is a sound non-negative number, so a malformed extra never shows.
+  const out = { asset, value };
+  const num = (x) => typeof x === 'number' && Number.isFinite(x) && x >= 0;
+  if (num(p.recipients)) out.recipients = p.recipients;
+  if (num(p.epochMs)) out.epochMs = p.epochMs;
+  if (num(p.lastAt)) out.lastAt = p.lastAt;
+  return out;
 }
 
 /** Whether a digest meets a big-endian target, read the way the pool reads it. */

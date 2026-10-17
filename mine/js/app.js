@@ -59,7 +59,9 @@ function renderStatus(d) {
 // a share still reads as a number instead of rounding to 0.
 function fmtAmount(v) {
   const abs = Math.abs(v);
-  const digits = abs === 0 ? 0 : abs >= 1000 ? 0 : abs >= 1 ? 2 : abs >= 0.01 ? 4 : 6;
+  // More fraction digits the smaller it is, down to the fine decimals a
+  // fraction of a tokenised share needs early on, so it never rounds to 0.
+  const digits = abs === 0 ? 0 : abs >= 1000 ? 0 : abs >= 1 ? 2 : abs >= 0.01 ? 4 : abs >= 0.0001 ? 6 : 8;
   return v.toLocaleString(undefined, { maximumFractionDigits: digits });
 }
 

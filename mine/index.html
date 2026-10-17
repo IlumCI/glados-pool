@@ -17,7 +17,7 @@
 :root {
   --bg0:#04202E; --bg1:#072A3C; --panel:#0C3A50; --panel-2:#0F4157;
   --edge:#235066; --edge-2:#2F6A80; --well:#19303D;
-  --ink:#E7F2F8; --dim:#A6C3D0; --faint:#82A1AF;
+  --ink:#E7F2F8; --dim:#A6C3D0; --faint:#8AA8B6;
   --accent:#F28C1E; --accent-deep:#C9731A; --link-hot:#FFD8A6;
   --mono:"Cascadia Mono",Consolas,"Courier New",monospace;
   --ui:"Segoe UI",Frutiger,"Frutiger Linotype",Tahoma,Verdana,Arial,sans-serif;
@@ -52,9 +52,9 @@ code { font-family: var(--mono); }
   font: 600 11px/1 var(--mono); letter-spacing: .14em; text-transform: uppercase;
   color: var(--faint); border: 1px solid var(--edge); padding: 5px 9px; background: rgba(0,0,0,.18);
 }
-#status::before { content: ""; width: 8px; height: 8px; background: var(--faint); box-shadow: 0 0 0 0 rgba(242,140,30,0); }
+#status::before { content: ""; width: 8px; height: 8px; background: var(--faint); }
 #status[data-on="true"] { color: var(--accent); border-color: var(--accent-deep); }
-#status[data-on="true"]::before { background: var(--accent); box-shadow: 0 0 7px 1px rgba(242,140,30,.8); }
+#status[data-on="true"]::before { background: var(--accent); }
 
 /* The window body: setup on the left, the running state on the right. */
 #app {

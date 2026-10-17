@@ -89,6 +89,8 @@ input[type=text], select {
 }
 input[type=text] { font-family: var(--mono); font-size: 13px; }
 input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: 0; }
+/* The native placeholder is a low-contrast grey; name it so it clears AA (5.5:1 light, 5.4:1 dark). */
+::placeholder { color: var(--ink-dim); opacity: 1; }
 .controls { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-top: 14px; }
 button {
   font: inherit; font-size: 14px; font-weight: 600; padding: 6px 16px; cursor: pointer;
@@ -101,8 +103,9 @@ button:disabled { opacity: .55; cursor: not-allowed; }
 input[type=range] { flex: 1; min-width: 160px; accent-color: var(--accent); }
 .hint { font-size: 13px; color: var(--ink-dim); margin: 8px 0 0; }
 
-/* A line that names the holding gate, under the controls. */
-#gate { font-size: 13px; color: var(--ink-dim); border-left: 3px solid var(--accent); background: var(--panel-2); padding: 6px 10px; margin: 12px 0 0; }
+/* A line that names the holding gate, under the controls. A plain muted line,
+   not a second accent box: the page keeps one accent note, in "How you get paid". */
+#gate { font-size: 13px; color: var(--ink-dim); margin: 12px 0 0; }
 
 /* The live state, read like the miner program: a monospace instrument panel. */
 .readout { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 1px; background: var(--edge); border: 1px solid var(--edge); }

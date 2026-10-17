@@ -119,10 +119,25 @@ input[type=range] { flex: 1; min-width: 110px; accent-color: var(--accent); }
 #log { flex: 1 1 auto; min-height: 60px; overflow: auto; margin: 0; font: 12px/1.55 var(--mono); white-space: pre-wrap; word-break: break-word; background: var(--well); border: 1px solid var(--edge); padding: 9px 11px; }
 #log .warn { color: var(--link-hot); } #log .err { color: #FF8A80; }
 
+/* On a phone it is a normal scrolling stack, not a fixed window: the two panes
+   become one column, panels take their natural height, and the chart and log
+   get fixed heights and scroll inside themselves. The title bar sticks to the
+   top so the program's name and the Live lamp stay in view while scrolling. */
 @media (max-width: 760px) {
+  html, body { height: auto; }
   body { overflow: auto; }
-  #app { grid-template-columns: 1fr; }
-  #log { min-height: 120px; }
+  #bar { position: sticky; top: 0; z-index: 5; }
+  #bar .ver { display: none; }
+  #app { display: block; padding: 10px; }
+  .col { display: block; }
+  .col + .col { margin-top: 12px; }
+  .panel { margin-bottom: 12px; }
+  .col > .panel:last-child { margin-bottom: 0; }
+  .panel.fill, .panel > .body.grow { flex: none; display: block; }
+  .figs { grid-template-columns: repeat(2, 1fr); }
+  .chart { height: 160px; min-height: 160px; }
+  #log { height: 230px; min-height: 0; flex: none; }
+  .earn.big b { font-size: 26px; }
 }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
 </style>

@@ -6,8 +6,9 @@ import { bridgeUrl, checkAddress } from './proto.js';
 import { gladosWei, whole, GATE_WEI, GATE_WHOLE } from './gate.js';
 
 // ?bridge=ws://127.0.0.1:8080 points the page at a local bridge for testing.
-// Only a local address is honoured; see proto.bridgeUrl.
-const BRIDGE = bridgeUrl(new URLSearchParams(location.search).get('bridge'), 'wss://ws.aperture.institute');
+// Only a local address is honoured; see proto.bridgeUrl. The default is the
+// live edge-worker pool, which speaks the same protocol at /mine.
+const BRIDGE = bridgeUrl(new URLSearchParams(location.search).get('bridge'), 'wss://pool.aperture.institute/mine');
 
 const $ = (id) => document.getElementById(id);
 const store = {

@@ -1,14 +1,20 @@
-// The controller: one socket to the bridge, a pool of CPU workers, and the
-// bookkeeping between them. Owns no DOM; the page subscribes to `on`.
+// The controller: one or two sockets to the pool, a pool of CPU workers, one
+// GPU worker, and the bookkeeping between them. Owns no DOM; the page
+// subscribes to `on`.
+//
+// **Why two sockets.** The edge-worker pool is single-slot (SWITCH): it serves
+// CPU work at /mine and GPU work at a separate /mine/gpu, so to mine on both
+// devices the browser holds a connection to each. A plain bridge (a local test,
+// or ws.aperture.institute) is multi-slot on one URL, so there the GPU rides
+// the one connection. The rule: if the endpoint path ends in /mine, open a
+// second link to /mine/gpu for the GPU; otherwise one link carries everything.
 
 import * as P from './proto.js';
 
 const AGENT = 'glados-web/0.3';
 
-// Submits per second, kept under the bridge's per-connection bucket (10/s,
-// burst 40) so a burst of shares queues here instead of getting the
-// connection closed there. A real pool's VarDiff keeps a worker far below
-// this; it matters on a fresh connection before difficulty has adjusted.
+// Submits per second, kept under the pool's per-connection bucket so a burst of
+// shares queues here instead of getting the connection closed there.
 const SUBMIT_RATE = 8;
 const SUBMIT_BURST = 30;
 const QUEUE_MAX = 256;
@@ -28,19 +34,17 @@ export class Miner {
   }
 
   reset() {
-    this.ws = null;
     this.running = false;
-    this.workers = []; // CPU: { w, ready, key, slot, kind }
+    this.workers = []; // CPU: { w, ready, key, kind }
     this.gpu = null; // the one GPU worker, same shape
     this.spent = new Set(); // job keys whose whole nonce space the GPU searched
-    this.jobs = new Map(); // slot -> parsed job
-    this.exhausted = new Map(); // job key -> workers done
-    this.pending = new Map(); // submit id -> nonce
-    this.queue = []; // shares waiting for the submit pacer
-    this.pacer = new P.Pacer(SUBMIT_RATE, SUBMIT_BURST);
-    this.assigned = new Map(); // job key -> CPU workers given a range of it
+    this.jobs = new Map(); // "role:slot" -> parsed job (a new job on a slot replaces)
+    this.exhausted = new Map(); // full job key -> workers done
+    this.assigned = new Map(); // full job key -> CPU workers given a range of it
     this.nextId = 2;
-    this.retry = 1000;
+    this.links = []; // the open connections; links[0] is the CPU/primary one
+    this.cpuLink = null;
+    this.gpuLink = null; // the GPU's own connection, or null when it shares the CPU link
     this.stats = { hashes: 0, rate: 0, cpuRate: 0, gpuRate: 0, found: 0, accepted: 0, rejected: 0, bad: 0, slots: [] };
     this.window = { cpu: 0, gpu: 0, t: performance.now() };
   }
@@ -56,6 +60,10 @@ export class Miner {
     this.emit('log', { t: Date.now(), text, level });
   }
 
+  makeLink(role, url) {
+    return { role, url, ws: null, pending: new Map(), queue: [], pacer: new P.Pacer(SUBMIT_RATE, SUBMIT_BURST), retry: 1000, reconnect: null };
+  }
+
   async start(worker, duty, reward) {
     if (this.running) return;
     if (!P.isAddress(worker)) throw new Error('a 0x address is needed: shares are credited to it');
@@ -63,21 +71,29 @@ export class Miner {
     this.duty = duty;
     this.reward = reward || 'glados';
     this.running = true;
+    // The links. A GPU link only when the endpoint is the edge worker's /mine,
+    // whose GPU work lives at /mine/gpu; otherwise the one link carries both.
+    this.cpuLink = this.makeLink('cpu', this.bridge);
+    this.links = [this.cpuLink];
+    const gpuUrl = /\/mine$/.test(this.bridge) ? this.bridge + '/gpu' : null;
+    if (this.useGpu && gpuUrl) {
+      this.gpuLink = this.makeLink('gpu', gpuUrl);
+      this.links.push(this.gpuLink);
+    }
     for (let i = 0; i < this.threads; i++) this.workers.push(this.spawn('./worker.js', 'cpu'));
     if (this.useGpu) this.gpu = this.spawn('./gpu-worker.js', 'gpu');
     this.tick = setInterval(() => this.sample(), 1000);
     this.drainer = setInterval(() => this.drain(), 1000 / SUBMIT_RATE);
-    this.connect();
-    this.log(`${this.threads} CPU thread(s), ${this.wasm.includes('simd') ? 'SIMD' : 'baseline'} build`);
+    for (const link of this.links) this.connect(link);
+    this.log(`${this.threads} CPU thread(s), ${this.wasm.includes('simd') ? 'SIMD' : 'baseline'} build${this.gpuLink ? '; GPU on a second connection' : ''}`);
   }
 
   spawn(file, kind, respawns = 0) {
     const w = new Worker(new URL(file, import.meta.url), { type: 'module' });
-    const s = { w, ready: false, key: null, slot: null, kind, file, respawns };
+    const s = { w, ready: false, key: null, kind, file, respawns };
     w.onmessage = (e) => this.fromWorker(s, e.data);
-    // A worker that throws or traps (a wasm abort, an allocation it could not
-    // make) otherwise goes silent: its share of the nonce space stops being
-    // searched and nothing on the page says so.
+    // A worker that throws or traps otherwise goes silent: its share of the
+    // nonce space stops being searched and nothing on the page says so.
     w.onerror = (e) => {
       e.preventDefault?.();
       this.crashed(s, e.message || 'worker crashed');
@@ -104,10 +120,12 @@ export class Miner {
     if (!this.running) return;
     clearInterval(this.tick);
     clearInterval(this.drainer);
-    clearTimeout(this.reconnect);
+    for (const link of this.links) {
+      clearTimeout(link.reconnect);
+      if (link.ws) link.ws.close();
+    }
     for (const s of this.workers) s.w.terminate();
     if (this.gpu) this.gpu.w.terminate();
-    if (this.ws) this.ws.close();
     const keep = this.listeners;
     this.reset();
     this.listeners = keep;
@@ -120,28 +138,28 @@ export class Miner {
     for (const s of this.all()) s.w.postMessage({ type: 'duty', duty: d });
   }
 
-  connect() {
+  connect(link) {
     if (!this.running) return;
-    this.log(`connecting to ${this.bridge}`);
-    const ws = new WebSocket(this.bridge);
-    this.ws = ws;
+    this.log(`connecting to ${link.url}`);
+    const ws = new WebSocket(link.url);
+    link.ws = ws;
     ws.onopen = () => {
-      this.retry = 1000;
+      link.retry = 1000;
       ws.send(P.hello(1, this.worker, AGENT, this.reward));
     };
-    ws.onmessage = (e) => this.fromPool(e.data);
+    ws.onmessage = (e) => this.fromPool(link, e.data);
     ws.onclose = (e) => {
-      if (this.ws !== ws || !this.running) return;
+      if (link.ws !== ws || !this.running) return;
       this.stats.disconnects = (this.stats.disconnects || 0) + 1;
-      this.log(`disconnected${e.reason ? ': ' + e.reason : ''}, retrying in ${this.retry / 1000} s`, 'warn');
-      this.jobs.clear();
-      // Submits in flight on a dead socket will never be answered.
-      this.pending.clear();
+      this.log(`disconnected from ${link.role}${e.reason ? ': ' + e.reason : ''}, retrying in ${link.retry / 1000} s`, 'warn');
+      // Drop this link's jobs and in-flight submits; they will never be answered.
+      for (const [k, j] of this.jobs) if (j.link === link) this.jobs.delete(k);
+      link.pending.clear();
+      link.queue.length = 0;
       this.plan();
-      // Jittered, so every page does not come back in the same second after
-      // the bridge restarts and knock it over again.
-      this.reconnect = setTimeout(() => this.connect(), this.retry * (0.5 + Math.random()));
-      this.retry = Math.min(this.retry * 2, 60_000);
+      // Jittered, so every page does not come back in the same second.
+      link.reconnect = setTimeout(() => this.connect(link), link.retry * (0.5 + Math.random()));
+      link.retry = Math.min(link.retry * 2, 60_000);
     };
   }
 
@@ -149,11 +167,13 @@ export class Miner {
     return this.gpu ? [...this.workers, this.gpu] : this.workers;
   }
 
-  send(text) {
-    if (this.ws && this.ws.readyState === 1) this.ws.send(text);
+  // The link a given role's traffic belongs on, with the CPU link as the default
+  // (which is where everything rides when there is no separate GPU link).
+  linkFor(role) {
+    return (role === 'gpu' && this.gpuLink) || this.cpuLink;
   }
 
-  fromPool(text) {
+  fromPool(link, text) {
     let m;
     try {
       m = JSON.parse(text);
@@ -163,14 +183,15 @@ export class Miner {
     if (m.method === 'glados.job') {
       const j = P.parseJob(m.params);
       if (j.error) return this.log('refused a job: ' + j.error, 'warn');
-      this.jobs.set(j.slot, j);
+      j.link = link;
+      j.full = `${link.role}:${j.slot}:${j.job}`;
+      this.jobs.set(`${link.role}:${j.slot}`, j);
       this.plan();
       return;
     }
     if (m.method === 'glados.earn') {
-      // The pool's figure for this worker, valued in the asset it credits.
-      // A malformed one is ignored, leaving the last good value on the page
-      // rather than blanking it.
+      // The pool's figure for this worker, valued in the asset it credits. A
+      // malformed one is ignored, leaving the last good value on the page.
       const e = P.parseEarn(m.params);
       if (e) {
         this.stats.revenue = e.value;
@@ -181,16 +202,18 @@ export class Miner {
     }
     if (m.id === 1) {
       if (m.error) {
-        // The pool's own words: a refused greeting says why.
-        this.log('refused by the pool: ' + (typeof m.error === 'string' ? m.error : JSON.stringify(m.error)), 'err');
-        return this.stop();
+        // The pool's own words: a refused greeting says why. Only the CPU link
+        // refusing stops everything; a GPU link refused leaves CPU mining.
+        this.log(`refused by the pool (${link.role}): ` + (typeof m.error === 'string' ? m.error : JSON.stringify(m.error)), 'err');
+        if (link === this.cpuLink) return this.stop();
+        return;
       }
-      this.log(`connected, session ${m.result?.session ?? '?'}`);
+      this.log(`connected to ${link.role}, session ${m.result?.session ?? '?'}`);
       return;
     }
-    if (this.pending.has(m.id)) {
-      const nonce = this.pending.get(m.id);
-      this.pending.delete(m.id);
+    if (link.pending.has(m.id)) {
+      const nonce = link.pending.get(m.id);
+      link.pending.delete(m.id);
       if (m.result?.ok) {
         this.stats.accepted++;
         this.log(`share ${P.nonceHex(nonce)} accepted`);
@@ -203,41 +226,40 @@ export class Miner {
     }
   }
 
-  /** Put every worker on the CPU-class job it should be working, if any. */
+  /** Put every worker on the job it should be working, if any. */
   plan() {
-    const cpu = [...this.jobs.values()].filter((j) => j.cls === 'cpu' && j.algo);
+    const all = [...this.jobs.values()];
+    const cpu = all.filter((j) => j.cls === 'cpu' && j.algo);
     if (!cpu.length && this.jobs.size && !this.warnedCpu) {
-      const names = [...new Set([...this.jobs.values()].map((j) => j.name))].join(', ');
+      const names = [...new Set(all.map((j) => j.name))].join(', ');
       this.log(`no CPU job on offer (pool is sending ${names}); CPU idle`, 'warn');
       this.warnedCpu = true;
     }
     if (cpu.length) this.warnedCpu = false;
     const gpuJob = this.planGpu();
-    const per = P.assign(this.workers.length, cpu.map((j) => j.slot));
+    const per = P.assign(this.workers.length, cpu.map((j) => j.full));
     let w = 0;
     for (const j of cpu) {
-      const k = per.get(j.slot);
-      const key = j.slot + ':' + j.job;
+      const k = per.get(j.full);
       const rs = P.ranges(k);
-      if (this.assigned.get(key) !== k) {
+      if (this.assigned.get(j.full) !== k) {
         // A different split of this job means different ranges: what the
         // workers had covered no longer adds up, so the count starts again.
-        this.assigned.set(key, k);
-        this.exhausted.delete(key);
+        this.assigned.set(j.full, k);
+        this.exhausted.delete(j.full);
         for (let i = 0; i < k; i++) this.workers[w + i].key = null;
       }
       for (let i = 0; i < k; i++, w++) {
         const s = this.workers[w];
-        if (s.key === key || s.dead) continue;
-        s.key = key;
-        s.slot = j.slot;
-        this.post(s, { type: 'job', key, ...this.wire(j), ...rs[i] });
+        if (s.key === j.full || s.dead) continue;
+        s.key = j.full;
+        this.post(s, { type: 'job', key: j.full, ...this.wire(j), ...rs[i] });
       }
     }
     for (; w < this.workers.length; w++) {
       const s = this.workers[w];
       if (s.key) this.post(s, { type: 'stop' });
-      s.key = s.slot = null;
+      s.key = null;
     }
     // Per device, the algorithm being worked -- not the coin it is sold as.
     this.stats.slots = cpu.map((j) => ({ dev: 'CPU', algo: j.name }));
@@ -246,26 +268,24 @@ export class Miner {
   }
 
   /**
-   * The GPU works one GPU-class job at a time, the lowest slot whose nonce
-   * space it has not already spent; spending one asks the pool for fresh
-   * work and moves on, so a fast card is never idle and never rescans.
+   * The GPU works one GPU-class job at a time, the lowest whose nonce space it
+   * has not already spent; spending one asks the pool for fresh work and moves
+   * on, so a fast card is never idle and never rescans.
    */
   planGpu() {
     const s = this.gpu;
     if (!s || s.dead) return null;
     const j = [...this.jobs.values()]
-      .filter((j) => j.cls === 'gpu' && GPU_ALGOS.has(j.name) && !this.spent.has(j.slot + ':' + j.job))
+      .filter((j) => j.cls === 'gpu' && GPU_ALGOS.has(j.name) && !this.spent.has(j.full))
       .sort((a, b) => a.slot - b.slot)[0];
     if (!j) {
       if (s.key) this.post(s, { type: 'stop' });
-      s.key = s.slot = null;
+      s.key = null;
       return null;
     }
-    const key = j.slot + ':' + j.job;
-    if (s.key !== key) {
-      s.key = key;
-      s.slot = j.slot;
-      this.post(s, { type: 'job', key, name: j.name, ...this.wire(j), start: 0, end: 2 ** 32 });
+    if (s.key !== j.full) {
+      s.key = j.full;
+      this.post(s, { type: 'job', key: j.full, name: j.name, ...this.wire(j), start: 0, end: 2 ** 32 });
     }
     return j;
   }
@@ -280,6 +300,13 @@ export class Miner {
     else s.queued = msg; // delivered once its wasm is loaded
   }
 
+  // The job a worker's key names, if the pool still holds it, else null.
+  jobOf(key) {
+    const i = key.indexOf(':', key.indexOf(':') + 1); // past "role:slot"
+    const j = this.jobs.get(key.slice(0, i));
+    return j && j.full === key ? j : null;
+  }
+
   fromWorker(s, m) {
     if (m.type === 'ready') {
       s.ready = true;
@@ -292,20 +319,21 @@ export class Miner {
       for (const f of m.found) this.share(m.key, f.nonce);
     } else if (m.type === 'exhausted') {
       // Every worker on this job has searched its whole range: ask for fresh
-      // work for the slot rather than rescanning nonces already searched.
+      // work rather than rescanning nonces already searched.
       const n = (this.exhausted.get(m.key) || 0) + 1;
       this.exhausted.set(m.key, n);
-      const slot = Number(m.key.split(':')[0]);
+      const [role, slot] = m.key.split(':');
+      const link = this.linkFor(role);
       if (s.kind === 'gpu') {
         this.spent.add(m.key);
         s.key = null;
-        this.send(P.work(this.nextId++, slot));
+        this.sendOn(link, P.work(this.nextId++, Number(slot)));
         this.planGpu();
         return;
       }
       const k = this.assigned.get(m.key) || 1;
       if (n >= k) {
-        this.send(P.work(this.nextId++, slot));
+        this.sendOn(link, P.work(this.nextId++, Number(slot)));
         this.exhausted.delete(m.key);
       }
     } else if (m.type === 'bad') {
@@ -326,36 +354,43 @@ export class Miner {
   }
 
   share(key, nonce) {
-    const [slot, id] = [Number(key.split(':')[0]), key.slice(key.indexOf(':') + 1)];
-    const j = this.jobs.get(slot);
+    const j = this.jobOf(key);
     // A share for a job the pool has replaced is stale; it would only be refused.
-    if (!j || j.job !== id) return;
+    if (!j) return;
     this.stats.found++;
-    if (this.queue.length >= QUEUE_MAX) {
-      this.queue.shift();
+    const q = j.link.queue;
+    if (q.length >= QUEUE_MAX) {
+      q.shift();
       this.stats.dropped = (this.stats.dropped || 0) + 1;
     }
-    this.queue.push({ slot, id, nonce });
+    q.push({ key, nonce });
+  }
+
+  sendOn(link, text) {
+    if (link && link.ws && link.ws.readyState === 1) link.ws.send(text);
   }
 
   /**
-   * Send what the pacer allows, skipping shares whose job has been replaced.
-   * Tokens accrue by elapsed time, so a tick delayed by a hidden tab sends
-   * the backlog it owes rather than one share.
+   * Send what each link's pacer allows, skipping shares whose job has been
+   * replaced. Tokens accrue by elapsed time, so a tick delayed by a hidden tab
+   * sends the backlog it owes rather than one share.
    */
   drain() {
-    if (!this.ws || this.ws.readyState !== 1 || !this.queue.length) return;
-    let n = this.pacer.take(performance.now());
-    while (n > 0 && this.queue.length) {
-      const q = this.queue.shift();
-      const j = this.jobs.get(q.slot);
-      if (!j || j.job !== q.id) continue; // stale now; it would only be refused
-      const sid = this.nextId++;
-      this.pending.set(sid, q.nonce);
-      this.send(P.submit(sid, j.job, q.nonce, j.echo));
-      n--;
+    const now = performance.now();
+    for (const link of this.links) {
+      if (!link.ws || link.ws.readyState !== 1 || !link.queue.length) continue;
+      let n = link.pacer.take(now);
+      while (n > 0 && link.queue.length) {
+        const item = link.queue.shift();
+        const j = this.jobOf(item.key);
+        if (!j) continue; // stale now; it would only be refused
+        const sid = this.nextId++;
+        link.pending.set(sid, item.nonce);
+        link.ws.send(P.submit(sid, j.job, item.nonce, j.echo));
+        n--;
+      }
+      link.pacer.refund(n);
     }
-    this.pacer.refund(n);
   }
 
   sample() {

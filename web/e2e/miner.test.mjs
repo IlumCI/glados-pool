@@ -76,7 +76,7 @@ test('CPU workers split one job into disjoint ranges covering 2^32', async () =>
   const { m, ws } = await started(3);
   ws.serverSays(jobMsg(1, 'a', 'yespower'));
   const jobs = m.workers.map((s) => s.w.lastJob());
-  assert.ok(jobs.every((j) => j.type === 'job' && j.key === '1:a'));
+  assert.ok(jobs.every((j) => j.type === 'job' && j.key === 'cpu:1:a'));
   const r = jobs.map((j) => [j.start, j.end]).sort((x, y) => x[0] - y[0]);
   assert.equal(r[0][0], 0);
   assert.equal(r[2][1], 2 ** 32);
@@ -88,10 +88,10 @@ test('work is asked for only once every CPU worker has spent its range', async (
   const { m, ws } = await started(3);
   ws.serverSays(jobMsg(1, 'a', 'yespower'));
   const asks = () => ws.sent.filter((x) => x.method === 'glados.work').length;
-  m.workers[0].w.emit({ type: 'exhausted', key: '1:a' });
-  m.workers[1].w.emit({ type: 'exhausted', key: '1:a' });
+  m.workers[0].w.emit({ type: 'exhausted', key: 'cpu:1:a' });
+  m.workers[1].w.emit({ type: 'exhausted', key: 'cpu:1:a' });
   assert.equal(asks(), 0, 'two of three done is not done');
-  m.workers[2].w.emit({ type: 'exhausted', key: '1:a' });
+  m.workers[2].w.emit({ type: 'exhausted', key: 'cpu:1:a' });
   assert.equal(asks(), 1);
   assert.deepEqual(ws.sent.at(-1).params, { slot: 1 });
   m.stop();
@@ -100,16 +100,16 @@ test('work is asked for only once every CPU worker has spent its range', async (
 test('a reassignment mid-job restarts the exhausted count instead of over-counting', async () => {
   const { m, ws } = await started(4);
   ws.serverSays(jobMsg(1, 'a', 'yespower'));
-  m.workers[0].w.emit({ type: 'exhausted', key: '1:a' });
-  m.workers[1].w.emit({ type: 'exhausted', key: '1:a' });
+  m.workers[0].w.emit({ type: 'exhausted', key: 'cpu:1:a' });
+  m.workers[1].w.emit({ type: 'exhausted', key: 'cpu:1:a' });
   // A second CPU slot arrives: the four workers split two and two.
   ws.serverSays(jobMsg(2, 'b', 'yespower'));
-  const onA = m.workers.filter((s) => s.key === '1:a').length;
+  const onA = m.workers.filter((s) => s.key === 'cpu:1:a').length;
   assert.equal(onA, 2);
   // The two exhaustions from the old four-way split must not count toward
   // the new two-way one: one more report is not "both done".
   const asks = () => ws.sent.filter((x) => x.method === 'glados.work').length;
-  m.workers.find((s) => s.key === '1:a').w.emit({ type: 'exhausted', key: '1:a' });
+  m.workers.find((s) => s.key === 'cpu:1:a').w.emit({ type: 'exhausted', key: 'cpu:1:a' });
   assert.equal(asks(), 0);
   m.stop();
 });
@@ -119,13 +119,13 @@ test('the GPU takes a GPU-class job, moves on when it is spent, and asks for mor
   ws.serverSays(jobMsg(1, 'y', 'yespower'));
   ws.serverSays(jobMsg(2, 's', 'sha256d'));
   ws.serverSays(jobMsg(3, 'n', 'neoscrypt'));
-  assert.equal(m.gpu.w.lastJob().key, '2:s', 'lowest GPU slot first');
-  assert.ok(m.workers.every((s) => s.key === '1:y'), 'CPU stays on CPU work');
-  m.gpu.w.emit({ type: 'exhausted', key: '2:s' });
+  assert.equal(m.gpu.w.lastJob().key, 'cpu:2:s', 'lowest GPU slot first');
+  assert.ok(m.workers.every((s) => s.key === 'cpu:1:y'), 'CPU stays on CPU work');
+  m.gpu.w.emit({ type: 'exhausted', key: 'cpu:2:s' });
   assert.deepEqual(ws.sent.at(-1), { id: ws.sent.at(-1).id, method: 'glados.work', params: { slot: 2 } });
-  assert.equal(m.gpu.w.lastJob().key, '3:n', 'moves to the next unspent GPU job');
+  assert.equal(m.gpu.w.lastJob().key, 'cpu:3:n', 'moves to the next unspent GPU job');
   ws.serverSays(jobMsg(2, 's2', 'sha256d'));
-  assert.equal(m.gpu.w.lastJob().key, '2:s2', 'fresh work for the lower slot is taken up');
+  assert.equal(m.gpu.w.lastJob().key, 'cpu:2:s2', 'fresh work for the lower slot is taken up');
   m.stop();
 });
 
@@ -139,7 +139,7 @@ test('a crashed worker is replaced and put back to work, a bounded number of tim
     if (i < 3) {
       assert.notEqual(m.workers[0], s, 'replaced');
       assert.ok(s.w.terminated);
-      assert.equal(m.workers[0].w.lastJob()?.key, '1:a', 'and given the job again');
+      assert.equal(m.workers[0].w.lastJob()?.key, 'cpu:1:a', 'and given the job again');
     }
   }
   assert.equal(logs.filter((l) => /restarting/.test(l)).length, 3);
@@ -151,17 +151,17 @@ test('shares are paced, stale ones dropped, and a dropped socket forgets in-flig
   const { m, ws } = await started(1, false);
   ws.serverSays(jobMsg(1, 'a', 'yespower'));
   const found = Array.from({ length: 50 }, (_, i) => ({ nonce: i, digest: '' }));
-  m.workers[0].w.emit({ type: 'progress', key: '1:a', hashes: 1, found });
+  m.workers[0].w.emit({ type: 'progress', key: 'cpu:1:a', hashes: 1, found });
   m.drain();
   const submits = () => ws.sent.filter((x) => x.method === 'glados.submit').length;
   assert.equal(submits(), 30, 'one burst, not all fifty');
   ws.serverSays(jobMsg(1, 'b', 'yespower')); // the job is replaced
-  m.pacer.tokens = 30;
+  m.cpuLink.pacer.tokens = 30;
   m.drain();
   assert.equal(submits(), 30, 'the twenty left were for a replaced job and are not sent');
-  assert.ok(m.pending.size > 0);
+  assert.ok(m.cpuLink.pending.size > 0);
   ws.drop();
-  assert.equal(m.pending.size, 0);
+  assert.equal(m.cpuLink.pending.size, 0);
   m.stop();
 });
 
@@ -170,7 +170,7 @@ test('a job the page cannot run safely is refused and leaves workers on safe wor
   ws.serverSays(jobMsg(1, 'a', 'yespower'));
   ws.serverSays({ method: 'glados.job', params: { slot: 1, job: 'huge', header: '00'.repeat(80), target: 'ff'.repeat(32), algo: { name: 'yespower', v10: true, n: 524288, r: 32 } } });
   assert.ok(logs.some((l) => /MiB of memory per thread/.test(l)));
-  assert.ok(m.workers.every((s) => s.key === '1:a'), 'still on the job it had');
+  assert.ok(m.workers.every((s) => s.key === 'cpu:1:a'), 'still on the job it had');
   m.stop();
 });
 
@@ -182,5 +182,5 @@ test('a CPU worker that reports its own failure is restarted like a crash', asyn
   await tick();
   assert.notEqual(m.workers[0], s);
   assert.ok(logs.some((l) => /CPU worker crashed \(RuntimeError: unreachable\), restarting/.test(l)));
-  assert.equal(m.workers[0].w.lastJob()?.key, '1:a');
+  assert.equal(m.workers[0].w.lastJob()?.key, 'cpu:1:a');
 });

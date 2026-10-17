@@ -73,10 +73,13 @@ function renderEarn(d) {
   const code = (d && d.asset) || document.getElementById('reward').value;
   const [name, ticker] = ASSETS[code] || ASSETS.glados;
   const rev = d && d.revenue;
-  document.getElementById('s-earn-val').textContent = rev != null ? `${fmtAmount(rev)} ${ticker}` : '—';
-  document.getElementById('s-earn-cap').textContent = rev != null
-    ? `your mining revenue so far in ${name}, before power costs`
-    : `your mining revenue in ${name} shows here once the pool reports it`;
+  // The line appears only once the pool reports a figure; until then it is
+  // hidden rather than showing a dash, since the browser never invents one.
+  const el = document.getElementById('s-earn');
+  el.style.display = rev != null ? '' : 'none';
+  if (rev == null) return;
+  document.getElementById('s-earn-val').textContent = `${fmtAmount(rev)} ${ticker}`;
+  document.getElementById('s-earn-cap').textContent = `your mining revenue so far in ${name}, before power costs`;
 }
 
 const logEl = $('log');

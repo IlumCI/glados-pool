@@ -94,17 +94,73 @@ export class Progress {
     this.rec = normalize({});
     this.lastShares = 0; this.lastHashes = 0; this.lastTick = 0;
     this.lastPoint = 0; this.lastSave = 0;
+    this.pool = ''; this.syncSeq = 0; this.lastPush = 0;
+  }
+
+  // The pool's HTTP base, so the line can sync across a wallet's devices. When
+  // unset, progress stays local-only and everything else still works.
+  setPool(url) { this.pool = url || ''; }
+
+  // A real wallet (not the anonymous local line) is what we sync.
+  syncable() { return this.pool && /^0x[0-9a-f]{40}$/i.test(this.addr); }
+
+  // Merge the server's copy into ours by the maximum of every counter, so no
+  // device ever lowers the line; adopt the further-along series.
+  mergeIn(s) {
+    if (!s || typeof s !== 'object') return;
+    const a = this.rec, ahead = (Number(s.est) || 0) > a.est;
+    this.rec = {
+      est: Math.max(a.est, Number(s.est) || 0),
+      shares: Math.max(a.shares, Number(s.shares) || 0),
+      hashes: Math.max(a.hashes, Number(s.hashes) || 0),
+      seconds: Math.max(a.seconds, Number(s.seconds) || 0),
+      rate: Math.max(a.rate, Number(s.rate) || 0),
+      series: ahead && Array.isArray(s.series) && s.series.length ? s.series.slice(-CAP) : a.series,
+    };
+  }
+
+  // Fetch this wallet's saved line and fold it in. Guarded so a slow read for a
+  // wallet we have since switched away from is dropped.
+  async pull() {
+    if (!this.syncable()) return;
+    const seq = this.syncSeq;
+    try {
+      const r = await fetch(`${this.pool}/progress?address=${this.addr}&asset=${this.asset}`, { cache: 'no-store' });
+      if (!r.ok) return;
+      const { rec } = await r.json();
+      if (seq !== this.syncSeq || !rec) return; // switched wallet/asset meanwhile
+      this.mergeIn(rec);
+      this.render();
+      this.save(true, true); // persist the merged line locally, no second push
+    } catch {}
+  }
+
+  // Send our line up, throttled. The server merges it by maximum, so this only
+  // ever raises the shared line.
+  async push() {
+    if (!this.syncable()) return;
+    const t = now();
+    if (t - this.lastPush < 8000) return;
+    this.lastPush = t;
+    try {
+      await fetch(`${this.pool}/progress?address=${this.addr}&asset=${this.asset}`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ rec: this.rec }), keepalive: true,
+      });
+    } catch {}
   }
 
   // Point at a wallet and asset: load its saved line and show it. Called when a
   // valid address is entered and when the payout asset changes.
   switchTo(addr, asset) {
     this.save(true); // flush the line we are leaving
+    this.syncSeq++;
     this.addr = addr || this.addr;
     this.asset = asset || this.asset;
     this.rec = load(this.addr, this.asset);
     this.lastShares = 0; this.lastHashes = 0; this.lastTick = 0; this.lastPoint = 0;
     this.render();
+    this.pull(); // fold in this wallet's saved line from the server, if any
   }
 
   setAsset(asset) { if (asset && asset !== this.asset) this.switchTo(this.addr, asset); }
@@ -154,10 +210,11 @@ export class Progress {
     if (els.chart) els.chart.innerHTML = areaSvg(rec.series);
   }
 
-  save(force) {
+  save(force, noPush) {
     const t = now();
     if (!force && t - this.lastSave < 1500) return;
     this.lastSave = t;
     try { localStorage.setItem(keyFor(this.addr, this.asset), JSON.stringify(this.rec)); } catch {}
+    if (!noPush) this.push(); // also sync up, throttled inside push()
   }
 }

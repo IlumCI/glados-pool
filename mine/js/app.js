@@ -193,6 +193,7 @@ const progress = new Progress({
   earn: $('p-earn'), earnCap: $('p-earn-cap'), chart: $('p-chart'),
   shares: $('p-shares'), hashes: $('p-hashes'), time: $('p-time'),
 });
+progress.setPool(POOL_HTTP); // sync the line across this wallet's devices
 
 const addr = $('addr');
 const go = $('go');

@@ -282,6 +282,8 @@ go.onclick = async () => {
   }
   go.dataset.running = String(miner.running);
   go.textContent = miner.running ? 'Stop' : 'Start mining';
+  const st = $('status'); // the title-bar lamp: LIVE while mining, else idle
+  if (st) { st.dataset.on = String(miner.running); st.textContent = miner.running ? 'Live' : 'Idle'; }
   addr.disabled = miner.running;
   reward.disabled = miner.running;
 };

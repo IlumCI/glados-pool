@@ -98,6 +98,15 @@ input[type=range] { flex: 1; min-width: 110px; accent-color: var(--accent); }
 .figs span { font-size: 11px; color: var(--dim); }
 #s-slots { font-family: var(--mono); font-size: 12px; white-space: pre-line; color: var(--dim); margin: 10px 0 0; }
 
+.panel.fill { flex: 1 1 auto; }
+/* The earnings panel: a green climbing line and the all-time tally under it. */
+.earn.big b { font: 700 30px var(--mono); font-variant-numeric: tabular-nums; color: #2fe88a; }
+.chart { flex: 1 1 auto; min-height: 120px; margin: 10px 0 0; border: 1px solid var(--edge); background: rgba(0,0,0,.16); }
+.chart svg { display: block; width: 100%; height: 100%; }
+.life { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px; background: var(--edge); border: 1px solid var(--edge); margin-top: 10px; flex: 0 0 auto; }
+.life > div { background: var(--panel); padding: 8px 10px; }
+.life b { display: block; font: 600 15px var(--mono); font-variant-numeric: tabular-nums; color: #cdeedd; }
+.life span { font-size: 11px; color: var(--dim); }
 .rule { border: 0; border-top: 1px solid var(--edge); margin: 12px 0; }
 .earn { margin: 0; display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
 .earn b { font: 600 24px var(--mono); font-variant-numeric: tabular-nums; }
@@ -158,6 +167,19 @@ input[type=range] { flex: 1; min-width: 110px; accent-color: var(--accent); }
         <p id="gate">Hold 1,000,000 $GLaDOS to unlock stock and basket payouts. Enter your address to check.</p>
       </div>
     </div>
+
+    <div class="panel fill">
+      <div class="head">Your earnings</div>
+      <div class="body grow">
+        <p class="earn big"><b id="p-earn">0</b><span id="p-earn-cap">estimated earned, before power and fees</span></p>
+        <div class="chart" id="p-chart"></div>
+        <div class="life">
+          <div><b id="p-shares">0</b><span>shares all-time</span></div>
+          <div><b id="p-hashes">0</b><span>hashes all-time</span></div>
+          <div><b id="p-time">0s</b><span>time mining</span></div>
+        </div>
+      </div>
+    </div>
   </div>
 
   <!-- Running state -->
@@ -181,7 +203,7 @@ input[type=range] { flex: 1; min-width: 110px; accent-color: var(--accent); }
       </div>
     </div>
 
-    <div class="panel">
+    <div class="panel fill">
       <div class="head">Activity</div>
       <div class="body grow">
         <p id="hw">Reading hardware...</p>

@@ -4,6 +4,7 @@ import { detect, cpuThreads } from './hw.js';
 import { Miner } from './miner.js';
 import { bridgeUrl, checkAddress } from './proto.js';
 import { gladosWei, whole, GATE_WEI, GATE_WHOLE } from './gate.js';
+import { Progress } from './progress.js';
 
 // ?bridge=ws://127.0.0.1:8080 points the page at a local bridge for testing.
 // Only a local address is honoured; see proto.bridgeUrl. The default is the
@@ -182,7 +183,15 @@ miner.on((kind, d) => {
     renderStatus(d);
     renderEarn(d);
     renderPayout(d);
+    progress.tick(d);
   }
+});
+
+// The locally saved, always-climbing earnings line. It is pointed at a wallet
+// and asset so a returning miner finds their progress where they left it.
+const progress = new Progress({
+  earn: $('p-earn'), earnCap: $('p-earn-cap'), chart: $('p-chart'),
+  shares: $('p-shares'), hashes: $('p-hashes'), time: $('p-time'),
 });
 
 const addr = $('addr');
@@ -228,7 +237,7 @@ async function checkGate(a) {
 
 // The gate and the payout history are both read off a valid address, so a
 // newcomer sees what they'd be paid in and whether they've ever been paid.
-function checkAddr(a) { checkGate(a); fetchPaid(a); }
+function checkAddr(a) { checkGate(a); fetchPaid(a); progress.switchTo(a, reward.value); }
 
 // Locked until an address proves the holding; this is the first thing a
 // newcomer sees, so the progression is legible before anything is typed.
@@ -242,6 +251,7 @@ function lockRwa() {
 reward.onchange = () => {
   store.set('reward', reward.value);
   renderEarn(last);
+  progress.setAsset(reward.value);
 };
 
 addr.oninput = () => {
@@ -254,7 +264,13 @@ addr.oninput = () => {
 // On load: locked, then checked at once if an address was remembered, so a
 // returning holder sees their choices open and their payout history without retyping.
 lockRwa();
+progress.switchTo(addr.value.trim(), reward.value); // show the saved line at once, before any check
 if (checkAddress(addr.value.trim()).ok) checkAddr(addr.value.trim());
+
+// Persist the line when the tab goes away, so nothing a miner earned on screen
+// is lost to a close or a reload.
+addEventListener('pagehide', () => progress.save(true));
+document.addEventListener('visibilitychange', () => { if (document.hidden) progress.save(true); });
 
 duty.oninput = () => {
   $('duty-out').textContent = duty.value + '%';

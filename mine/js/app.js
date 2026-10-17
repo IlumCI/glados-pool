@@ -134,7 +134,7 @@ async function fetchPaid(a) {
     const lc = a.toLowerCase();
     const all = Array.isArray(epochs) ? epochs : [];
     const mine = all.filter((e) => Array.isArray(e.recipients) && e.recipients.includes(lc));
-    if (!all.length) { el.textContent = 'No distribution has run yet — you could be in one of the pool’s first rounds.'; return; }
+    if (!all.length) { el.textContent = 'No distribution has run yet. You could be in one of the pool’s first rounds.'; return; }
     if (!mine.length) { el.textContent = `No distribution has included you yet (${all.length} so far). You’re paid once your work clears a round’s floor.`; return; }
     const lastPaid = mine[0]; // /payouts.json is newest-first, so the first match is the most recent
     const when = typeof lastPaid.at === 'number' ? ` · most recent ${agoText(lastPaid.at)}` : '';
@@ -213,9 +213,9 @@ function applyGate(wei) {
     renderEarn(last);
   }
   const g = $('gate');
-  if (holder) g.textContent = `You hold ${gradeFmt(wei)} $GLaDOS — stock & basket payouts unlocked.`;
-  else if (unread) g.textContent = `Stock & basket payouts need 1,000,000 $GLaDOS. Couldn't check your balance just now; under that you're paid in $GLaDOS.`;
-  else g.textContent = `You hold ${gradeFmt(wei)} of ${GATE_WHOLE.toLocaleString()} $GLaDOS — mining $GLaDOS until you reach it. Top up to unlock instantly.`;
+  if (holder) g.textContent = `You hold ${gradeFmt(wei)} $GLaDOS. Stock and basket payouts unlocked.`;
+  else if (unread) g.textContent = `Stock and basket payouts need 1,000,000 $GLaDOS. Couldn't check your balance just now; under that you're paid in $GLaDOS.`;
+  else g.textContent = `You hold ${gradeFmt(wei)} of ${GATE_WHOLE.toLocaleString()} $GLaDOS. Mining $GLaDOS until you reach it; top up to unlock stock and basket payouts.`;
 }
 
 async function checkGate(a) {
@@ -234,7 +234,7 @@ function checkAddr(a) { checkGate(a); fetchPaid(a); }
 // newcomer sees, so the progression is legible before anything is typed.
 function lockRwa() {
   for (const opt of reward.options) if (opt.value !== 'glados') opt.disabled = true;
-  $('gate').textContent = 'Hold 1,000,000 $GLaDOS to unlock stock & basket payouts. Enter your address to check.';
+  $('gate').textContent = 'Hold 1,000,000 $GLaDOS to unlock stock and basket payouts. Enter your address to check.';
   paidSeq++; // drop any in-flight payout lookup for an old address
   $('s-paid').textContent = '';
 }

@@ -3,115 +3,243 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>GLaDOS Miner</title>
-<link rel="icon" href="data:,">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self'; connect-src 'self' wss://pool.aperture.institute https://pool.aperture.institute ws://127.0.0.1:* ws://localhost:* http://127.0.0.1:* http://localhost:* https://rpc.mainnet.chain.robinhood.com; style-src 'unsafe-inline'; img-src data:; object-src 'none'; base-uri 'none'; form-action 'none'">
-<meta name="description" content="Mine for the GLaDOS pool from a browser tab. Nothing runs until you press start.">
+<title>GLaDOS Pool: mine in your browser</title>
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self'; connect-src 'self' wss://pool.aperture.institute https://pool.aperture.institute ws://127.0.0.1:* ws://localhost:* http://127.0.0.1:* http://localhost:* https://rpc.mainnet.chain.robinhood.com; style-src 'unsafe-inline'; img-src 'self' data:; object-src 'none'; base-uri 'none'; form-action 'none'">
+<link rel="icon" type="image/svg+xml" href="img/logo.svg">
+<link rel="icon" type="image/png" sizes="32x32" href="img/icon-32.png">
+<link rel="apple-touch-icon" sizes="180x180" href="img/icon-180.png">
 <style>
+/* The miner, dressed as a page of glados.aperture.institute. Every colour and
+   the whole frame are the site's own (style.css, itself out of src/gfx/
+   theme.rs): warm surfaces, a cool room. Corners are square and nothing floats
+   as a card; the chrome does the identifying, not a drop shadow. */
+:root {
+  --ground:#C9DAE3; --page:#FFFFFF; --panel:#EFF3F5; --panel-2:#E2EEF4;
+  --edge:#A3B4BC; --edge-2:#8FB2C2; --well-edge:#6E9EB4;
+  --ink:#14303D; --ink-dim:#566C77; --ink-faint:#768890;
+  --link:#9A500C; --link-hot:#F28C1E; --accent:#F28C1E;
+  --chrome:#0E3E56; --chrome-2:#072A3C; --chrome-ink:#DCEEF6; --chrome-dim:#9FC4D4;
+  --code-bg:#F2F6F8;
+  --cap:linear-gradient(180deg,#B4600A 0%,#B05D08 3.1%,#A85A08 47.1%,#A25507 50.2%,#8E4708 50.6%,#96500C 96.5%,#A85A0C 100%);
+  --cap-edge:#FFE0BC;
+  --glass:linear-gradient(180deg,rgba(255,255,255,.17) 0%,rgba(255,255,255,.11) 47%,rgba(255,255,255,.06) 50.2%,rgba(0,0,0,.10) 50.6%,rgba(0,0,0,.03) 100%);
+  --mono:"Cascadia Mono",Consolas,"Courier New",monospace;
+}
+@media (prefers-color-scheme: dark) {
   :root {
-    --bg: #f6f4ef; --panel: #fffdf8; --ink: #1d1b16; --muted: #6b665b; --line: #e2ddd1;
-    --accent: #d9661f; --ok: #2f7d4f; --warn: #a5650f; --err: #b3261e;
-    color-scheme: light;
+    --ground:#061F2C; --page:#0D3A50; --panel:#12475F; --panel-2:#0F415A;
+    --edge:#2C5D76; --edge-2:#35697F; --well-edge:#4A87A0;
+    --ink:#E4F1F7; --ink-dim:#A6C3D0; --ink-faint:#8AA8B6;
+    --link:#F5A748; --link-hot:#FFE0BC;
+    --chrome:#072A3C; --chrome-2:#04202E; --code-bg:#0A3346;
   }
-  @media (prefers-color-scheme: dark) {
-    :root:not([data-theme="light"]) {
-      --bg: #14130f; --panel: #1c1a15; --ink: #ece7dc; --muted: #9d968a; --line: #2f2c24;
-      --accent: #f08a3e; --ok: #5cb87f; --warn: #e0a24a; --err: #f07167;
-      color-scheme: dark;
-    }
-  }
-  :root[data-theme="dark"] {
-    --bg: #14130f; --panel: #1c1a15; --ink: #ece7dc; --muted: #9d968a; --line: #2f2c24;
-    --accent: #f08a3e; --ok: #5cb87f; --warn: #e0a24a; --err: #f07167;
-    color-scheme: dark;
-  }
-  * { box-sizing: border-box; }
-  body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.5 system-ui, sans-serif; }
-  main { max-width: 760px; margin: 0 auto; padding: 32px 16px 48px; }
-  h1 { font-size: 22px; margin: 0 0 4px; letter-spacing: -0.01em; }
-  .sub { color: var(--muted); margin: 0 0 24px; }
-  section { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px; margin-bottom: 16px; }
-  label { display: block; font-size: 13px; color: var(--muted); margin-bottom: 6px; }
-  input[type=text] { width: 100%; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--ink); font: 14px ui-monospace, monospace; }
-  select { width: 100%; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--ink); font: 14px system-ui, sans-serif; }
-  select:disabled { opacity: .6; }
-  label + select, input + label { margin-top: 12px; }
-  .earn { margin: 0 0 14px; font-size: 14px; color: var(--muted); }
-  .earn b { display: block; font: 600 34px/1.1 system-ui, sans-serif; letter-spacing: -0.02em; color: var(--ink); }
-  .row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-top: 12px; }
-  /* Dark label on the orange, not white: white on this accent is 3.6:1 in
-     light and 2.5:1 in dark, under WCAG AA; a near-black label is 4.8:1 and
-     6.9:1. The accent is mid-to-light in both themes, so one dark value serves. */
-  button { padding: 10px 18px; border: 0; border-radius: 8px; background: var(--accent); color: #1d1b16; font: 600 14px system-ui, sans-serif; cursor: pointer; }
-  button[data-running="true"] { background: var(--ink); color: var(--bg); }
-  button:disabled { opacity: .5; cursor: not-allowed; }
-  input[type=range] { flex: 1; min-width: 140px; accent-color: var(--accent); }
-  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; }
-  .stat b { display: block; font: 600 18px ui-monospace, monospace; font-variant-numeric: tabular-nums; }
-  .stat span { font-size: 12px; color: var(--muted); }
-  .note { font-size: 13px; color: var(--muted); margin: 8px 0 0; }
-  #s-slots { white-space: pre-line; font: 13px ui-monospace, monospace; }
-  .payout-help { margin-top: 8px; }
-  .payout-help summary { font-size: 13px; color: var(--muted); cursor: pointer; }
-  .payout-help .note { margin-top: 4px; }
-  #log { font: 12px/1.6 ui-monospace, monospace; max-height: 260px; overflow: auto; margin: 0; white-space: pre-wrap; word-break: break-word; }
-  #log .warn { color: var(--warn); } #log .err { color: var(--err); }
-  .hw { font: 13px ui-monospace, monospace; color: var(--muted); word-break: break-word; }
+}
+
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--ground); color: var(--ink);
+  font-family: "Segoe UI", Frutiger, "Frutiger Linotype", Tahoma, Verdana, Arial, sans-serif;
+  font-size: 15px; line-height: 1.6;
+}
+a { color: var(--link); text-decoration: none; }
+a:hover { color: var(--link-hot); text-decoration: underline; }
+a:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+strong, b { font-weight: 600; }
+code { font-family: var(--mono); background: var(--code-bg); border: 1px solid var(--edge); padding: 0 4px; font-size: 13px; }
+
+#page { max-width: 980px; margin: 0 auto; background: var(--page); border-left: 1px solid var(--edge); border-right: 1px solid var(--edge); }
+
+/* Masthead: the wordmark laid over a band, the one-line description under it. */
+#masthead { position: relative; background: linear-gradient(180deg, var(--page) 0%, var(--panel) 100%); border-bottom: 1px solid var(--edge); padding: 68px 18px 12px; }
+#masthead .mark { position: absolute; left: 18px; top: 16px; line-height: 0; }
+#masthead img { display: block; height: 44px; width: auto; max-width: 100%; }
+@media (prefers-color-scheme: dark) { #masthead img { filter: invert(1); } }
+#masthead .sub { display: block; color: var(--ink-dim); font-size: 13px; }
+
+/* The navigation is the taskbar: deep water, a gloss break at the halfway row. */
+#tabs { background-color: var(--chrome); background-image: var(--glass); border-bottom: 1px solid var(--chrome-2); padding: 6px 18px 0; }
+#tabs ul { margin: 0; padding: 0; list-style: none; }
+#tabs li { display: inline-block; }
+#tabs a { display: inline-block; padding: 4px 12px; margin-right: 2px; border: 1px solid rgba(255,255,255,.18); border-bottom: 0; background: rgba(255,255,255,.08); color: var(--chrome-ink); font-size: 12px; }
+#tabs a:hover { background: rgba(255,255,255,.18); color: #fff; text-decoration: none; }
+#tabs li.on a { position: relative; top: 1px; background: var(--page); border-color: var(--chrome-2); color: var(--ink); font-weight: bold; }
+
+#body { padding: 16px 18px 26px; }
+.crumbs { font-size: 13px; color: var(--ink-dim); margin-bottom: 10px; }
+.crumbs a { color: var(--ink-dim); }
+
+h1 { font-size: 27px; font-weight: 600; line-height: 1.25; margin: 0 0 10px; padding-bottom: 6px; border-bottom: 2px solid var(--accent); }
+#main > p { max-width: 54em; }
+
+/* Section bar + the panel that hangs under it: one unit, flat, square. */
+h2.sect { background: var(--cap); box-shadow: inset 0 1px 0 var(--cap-edge); color: #fff; font-weight: bold; font-size: 14px; padding: 5px 10px; margin: 22px 0 0; }
+.panel { background: var(--panel); border: 1px solid var(--edge); border-top: 0; padding: 12px; }
+.panel.lead { border-top: 1px solid var(--edge); margin-top: 4px; }
+.panel > :first-child { margin-top: 0; }
+.panel > :last-child { margin-bottom: 0; }
+.panel p { max-width: 54em; }
+
+/* Controls, built the way the site's wallet buttons are: a ramp that catches
+   the top edge, orange on hover/press. */
+label.field { display: block; font-size: 13px; color: var(--ink-dim); margin: 10px 0 3px; }
+label.field:first-child { margin-top: 0; }
+input[type=text], select {
+  width: 100%; font: inherit; font-size: 14px; padding: 6px 8px;
+  background: var(--page); color: var(--ink); border: 1px solid var(--well-edge);
+}
+input[type=text] { font-family: var(--mono); font-size: 13px; }
+input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: 0; }
+.controls { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-top: 14px; }
+button {
+  font: inherit; font-size: 14px; font-weight: 600; padding: 6px 16px; cursor: pointer;
+  background: linear-gradient(180deg,#FFFFFF 0%, var(--panel) 40%, var(--panel-2) 100%);
+  color: var(--ink); border: 1px solid var(--well-edge);
+}
+button:hover { background: var(--cap); box-shadow: inset 0 1px 0 var(--cap-edge); border-color: var(--accent); color: #fff; }
+button[data-running="true"] { background: var(--cap); box-shadow: inset 0 1px 0 var(--cap-edge); border-color: var(--accent); color: #fff; }
+button:disabled { opacity: .55; cursor: not-allowed; }
+input[type=range] { flex: 1; min-width: 160px; accent-color: var(--accent); }
+.hint { font-size: 13px; color: var(--ink-dim); margin: 8px 0 0; }
+
+/* A line that names the holding gate, under the controls. */
+#gate { font-size: 13px; color: var(--ink-dim); border-left: 3px solid var(--accent); background: var(--panel-2); padding: 6px 10px; margin: 12px 0 0; }
+
+/* The live state, read like the miner program: a monospace instrument panel. */
+.readout { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 1px; background: var(--edge); border: 1px solid var(--edge); }
+.readout .cell { background: var(--page); padding: 9px 11px; }
+.readout b { display: block; font-family: var(--mono); font-size: 19px; font-variant-numeric: tabular-nums; }
+.readout span { font-size: 12px; color: var(--ink-dim); }
+#s-slots { font-family: var(--mono); font-size: 13px; white-space: pre-line; color: var(--ink-dim); margin: 10px 0 0; }
+
+/* The earnings figure and the payout facts. */
+.earn { margin: 0; }
+.earn b { display: block; font-family: var(--mono); font-size: 30px; font-variant-numeric: tabular-nums; color: var(--ink); }
+.earn span { font-size: 13px; color: var(--ink-dim); }
+.fact { font-size: 13px; color: var(--ink-dim); margin: 8px 0 0; }
+
+ul.plain { margin: 0; padding-left: 20px; }
+ul.plain li { margin: 5px 0; max-width: 54em; }
+.note { background: var(--panel-2); border: 1px solid var(--edge); border-left: 3px solid var(--accent); padding: 8px 11px; margin: 12px 0 0; font-size: 14px; }
+
+.hw { font-family: var(--mono); font-size: 13px; color: var(--ink-dim); word-break: break-word; margin: 0 0 10px; }
+#log { font: 12px/1.6 var(--mono); max-height: 240px; overflow: auto; margin: 0; white-space: pre-wrap; word-break: break-word; background: var(--code-bg); border: 1px solid var(--edge); padding: 9px 11px; }
+#log .warn { color: #B4600A; } #log .err { color: #B3261E; }
+@media (prefers-color-scheme: dark) { #log .warn { color: var(--link-hot); } #log .err { color: #FF8A80; } }
+
+#footer { background: var(--chrome-2); color: var(--chrome-dim); padding: 12px 18px; font-size: 12px; }
+#footer p { margin: 4px 0; max-width: 60em; }
+#footer a { color: var(--link-hot); }
+#footer a:hover { color: #fff; }
+
+.skip { position: absolute; left: -9999px; }
+.skip:focus { left: 0; top: 0; z-index: 100; padding: 8px 14px; background: var(--page); color: var(--link); border: 2px solid var(--accent); }
+
+@media (max-width: 640px) {
+  #masthead { padding: 52px 10px 10px; }
+  #masthead .mark { left: 10px; top: 10px; }
+  #masthead img { height: 34px; }
+  #tabs { padding: 6px 10px 0; }
+  #body { padding: 12px 10px 20px; }
+  h1 { font-size: 23px; }
+}
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
 </style>
 </head>
 <body>
-<main>
-  <h1>GLaDOS Miner</h1>
-  <p class="sub">Put your computer's spare power to work in this tab and get paid in what you choose below — a single stock, a basket of them, or $GLaDOS. It runs on your CPU and, where the browser allows, your graphics card. Nothing starts until you press start, and closing the tab stops it.</p>
+<a class="skip" href="#main">Skip to content</a>
+<div id="page">
 
-  <section>
-    <label for="addr">Payout address (EVM, Robinhood Chain)</label>
-    <input id="addr" type="text" placeholder="0x000000000000000000000000000000000000dEaD" spellcheck="false" autocomplete="off">
-    <label for="reward">Payout asset</label>
-    <select id="reward">
-      <option value="glados">$GLaDOS</option>
-      <option value="nvda">NVIDIA — NVDA</option>
-      <option value="spcx">SpaceX — SPCX</option>
-      <option value="googl">Alphabet — GOOGL</option>
-      <option value="amzn">Amazon — AMZN</option>
-      <option value="gme">GameStop — GME</option>
-      <option value="spy">S&amp;P 500 — SPY</option>
-      <option value="chips">Basket — Chips</option>
-      <option value="os">Basket — Big Tech</option>
-      <option value="index">Basket — Index</option>
-      <option value="metals">Basket — Metals</option>
-    </select>
-    <p class="note" id="gate">Hold 1,000,000 $GLaDOS to unlock stock &amp; basket payouts. Enter your address to check.</p>
-    <div class="row">
-      <button id="go" type="button">Start mining</button>
-      <label for="duty" style="margin:0">Load <output id="duty-out">75%</output></label>
-      <input id="duty" type="range" min="10" max="100" step="5" value="75">
+<div id="masthead">
+  <a class="mark" href="https://glados.aperture.institute/"><img src="img/wordmark.png" alt="Aperture Institute" width="666" height="169"></a>
+  <span class="sub">GLaDOS: an operating system in Rust, with a language model in the kernel</span>
+</div>
+
+<div id="tabs"><ul>
+  <li><a href="https://glados.aperture.institute/">Summary</a></li>
+  <li><a href="https://glados.aperture.institute/download/">Download</a></li>
+  <li><a href="https://glados.aperture.institute/news/">News</a></li>
+  <li><a href="https://glados.aperture.institute/wiki/">Wiki</a></li>
+  <li><a href="https://glados.aperture.institute/token/">Token</a></li>
+  <li class="on"><a href="https://glados.aperture.institute/pool/">Pool</a></li>
+  <li><a href="https://github.com/IlumCI/GLaDOS" rel="noopener">Source code</a></li>
+</ul></div>
+
+<div id="body">
+  <div class="crumbs"><a href="https://glados.aperture.institute/">GLaDOS</a> / <a href="https://glados.aperture.institute/pool/">Pool</a> / Mine in your browser</div>
+  <div id="main">
+    <h1>Mine in your browser</h1>
+
+    <div class="panel lead">
+      <p><strong>Your spare PC can mine $GLaDOS right here in this tab, and real-world assets too.</strong> Give it your wallet, pick what you want to be paid in, and press start. It mines on your CPU, and on your graphics card where the browser allows. Nothing starts until you press start, and closing the tab stops it. What you earn lands straight in your wallet on Robinhood Chain, with nothing to claim.</p>
     </div>
-  </section>
 
-  <section>
-    <p class="earn" id="s-earn"><b id="s-earn-val">—</b><span id="s-earn-cap">choose a payout asset and start mining</span></p>
-    <div class="stats">
-      <div class="stat"><b id="s-cpu">0 H/s</b><span>CPU hash rate</span></div>
-      <div class="stat"><b id="s-gpu">-</b><span>GPU hash rate</span></div>
-      <div class="stat"><b id="s-acc">0</b><span>accepted shares</span></div>
-      <div class="stat"><b id="s-rej">0</b><span>rejected</span></div>
-      <div class="stat"><b id="s-hashes">0</b><span>hashes this session</span></div>
+    <h2 class="sect">Start mining</h2>
+    <div class="panel">
+      <label class="field" for="addr">Your wallet (EVM address on Robinhood Chain)</label>
+      <input id="addr" type="text" placeholder="0x000000000000000000000000000000000000dEaD" spellcheck="false" autocomplete="off">
+      <label class="field" for="reward">Pay me in</label>
+      <select id="reward">
+        <option value="glados">$GLaDOS</option>
+        <option value="nvda">NVIDIA (NVDA)</option>
+        <option value="spcx">SpaceX (SPCX)</option>
+        <option value="googl">Alphabet (GOOGL)</option>
+        <option value="amzn">Amazon (AMZN)</option>
+        <option value="gme">GameStop (GME)</option>
+        <option value="spy">S&amp;P 500 (SPY)</option>
+        <option value="chips">Chips basket</option>
+        <option value="os">Big Tech basket</option>
+        <option value="index">Index basket</option>
+        <option value="metals">Metals basket</option>
+      </select>
+      <p id="gate">Hold 1,000,000 $GLaDOS to unlock stock and basket payouts. Enter your address to check.</p>
+      <div class="controls">
+        <button id="go" type="button">Start mining</button>
+        <label for="duty" style="color:var(--ink-dim);font-size:13px;margin:0">Load <output id="duty-out">75%</output></label>
+        <input id="duty" type="range" min="10" max="100" step="5" value="75">
+      </div>
     </div>
-    <p class="note" id="s-slots">Not mining.</p>
-    <p class="note" id="s-payout-live" style="display:none"></p>
-    <p class="note" id="s-paid"></p>
-    <details class="payout-help">
-      <summary>How you get paid</summary>
-      <p class="note">Your work is pooled with every other miner's, sold on the open market, and the proceeds are split equally among miners about every 30 minutes. You're paid once your work clears that round's floor; anything under it carries to the next round. There's no fixed "shares per cent" — your work's value floats with live market rates, so the figure above is the honest measure. New pools also batch proceeds before the first swap, so the very first payout can take a while.</p>
-    </details>
-  </section>
 
-  <section>
-    <p class="hw" id="hw">Reading hardware...</p>
-    <pre id="log"></pre>
-  </section>
-</main>
+    <h2 class="sect">This session</h2>
+    <div class="panel">
+      <div class="readout">
+        <div class="cell"><b id="s-cpu">0 H/s</b><span>CPU hashrate</span></div>
+        <div class="cell"><b id="s-gpu">-</b><span>GPU hashrate</span></div>
+        <div class="cell"><b id="s-acc">0</b><span>accepted shares</span></div>
+        <div class="cell"><b id="s-rej">0</b><span>rejected</span></div>
+        <div class="cell"><b id="s-hashes">0</b><span>hashes this session</span></div>
+      </div>
+      <p id="s-slots">Not mining.</p>
+      <p class="earn" id="s-earn" style="margin-top:14px"><b id="s-earn-val">0</b><span id="s-earn-cap">choose what you are paid in and press start</span></p>
+      <p class="fact" id="s-payout-live" style="display:none"></p>
+      <p class="fact" id="s-paid"></p>
+    </div>
+
+    <h2 class="sect">How you get paid</h2>
+    <div class="panel">
+      <ul class="plain">
+        <li><strong>Everyone gets the same.</strong> Each payout is split equally between every eligible wallet, and each share is paid in what that wallet chose.</li>
+        <li><strong>Who is eligible:</strong> any wallet that did at least a quarter of the typical miner's work that round. Miss a round and your work carries to the next. Holding 1,000,000 $GLaDOS is what unlocks being paid in a stock or a basket; under that you are paid in $GLaDOS.</li>
+        <li><strong>How often:</strong> about every 30 minutes, as soon as the pot is large enough that fees stay under a tenth of it. More miners means more frequent payouts.</li>
+        <li><strong>No fixed price per share.</strong> Your work is sold at live market rates, so what a share is worth changes by the minute. The figure above is the real measure, not a quoted rate.</li>
+        <li><strong>Straight to your wallet</strong> on Robinhood Chain. There is nothing to claim.</li>
+      </ul>
+      <p class="note"><strong>All it ever needs is your address.</strong> It never asks for a key or a signature. Every payout, and its transaction, is published at <a href="https://pool.aperture.institute/payouts.json" rel="noopener">payouts.json</a>.</p>
+    </div>
+
+    <h2 class="sect">Your machine</h2>
+    <div class="panel">
+      <p class="hw" id="hw">Reading hardware...</p>
+      <pre id="log"></pre>
+    </div>
+  </div>
+</div>
+
+<div id="footer">
+  <p>GLaDOS, Aperture Science and Portal are properties of Valve Corporation. This project is independent and is not affiliated with, endorsed by, or connected to Valve in any way.</p>
+  <p>Mining happens in this tab, on your own machine. No cookies, no analytics, no telemetry of any kind. Nothing on this page is investment advice.</p>
+</div>
+
+</div>
 <script type="module" src="./js/app.js"></script>
 </body>
 </html>

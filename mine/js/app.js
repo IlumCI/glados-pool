@@ -195,6 +195,53 @@ const progress = new Progress({
 });
 progress.setPool(POOL_HTTP); // sync the line across this wallet's devices
 
+// The outage strip. A connection the miner lost, or a component the pool's
+// own status feed calls not operational, is said in plain words with the
+// pool's reason, with the reassurance that matters: progress is saved and the
+// miner reconnects by itself. The feed is read at most once a minute, and only
+// polled while something is wrong, so a healthy page costs it one read.
+const STATUS_PAGE = 'https://glados-status.pages.dev'; // status.aperture.institute once the domain is attached
+const linkDown = new Set();
+let healthAt = 0, healthWhy = '';
+async function poolTrouble() {
+  if (!POOL_HTTP) return '';
+  if (Date.now() - healthAt < 60_000) return healthWhy;
+  healthAt = Date.now();
+  try {
+    const r = await fetch(POOL_HTTP + '/health.json', { cache: 'no-store' });
+    const j = await r.json().catch(() => null);
+    if (!r.ok) healthWhy = (j && j.why) || `the pool answered ${r.status}`;
+    else {
+      const bad = j && j.components ? Object.values(j.components).filter((c) => c.state !== 'operational') : [];
+      healthWhy = bad.map((c) => `${c.name}: ${c.why || c.state}`).join('; ');
+    }
+  } catch {
+    healthWhy = 'the pool could not be reached';
+  }
+  return healthWhy;
+}
+async function renderOutage() {
+  const el = $('outage');
+  const why = await poolTrouble();
+  const down = [...linkDown].map((r) => (r === 'gpu' ? 'GPU' : 'CPU'));
+  if (!down.length && !why) { el.hidden = true; return; }
+  el.textContent = '';
+  const head = document.createElement('b');
+  head.textContent = down.length ? `${down.join(' and ')} mining is not connected right now.` : 'The pool is having trouble right now.';
+  el.append(head, ` ${why ? why.charAt(0).toUpperCase() + why.slice(1) + '. ' : ''}Your saved progress is safe, and the miner reconnects on its own. `);
+  const a = document.createElement('a');
+  a.href = STATUS_PAGE; a.target = '_blank'; a.rel = 'noopener'; a.textContent = 'Live status';
+  el.append(a);
+  el.hidden = false;
+}
+miner.on((kind, d) => {
+  if (kind !== 'link') return;
+  if (d.up) linkDown.delete(d.role); else linkDown.add(d.role);
+  renderOutage();
+});
+renderOutage(); // a visitor learns about trouble before pressing start
+setInterval(() => { if (linkDown.size || !$('outage').hidden) renderOutage(); }, 60_000);
+
 const addr = $('addr');
 const go = $('go');
 const duty = $('duty');
@@ -299,6 +346,7 @@ go.onclick = async () => {
   }
   go.dataset.running = String(miner.running);
   go.textContent = miner.running ? 'Stop' : 'Start mining';
+  if (!miner.running) { linkDown.clear(); renderOutage(); } // a stopped miner is not an outage
   const st = $('status'); // the title-bar lamp: LIVE while mining, else idle
   if (st) { st.dataset.on = String(miner.running); st.textContent = miner.running ? 'Live' : 'Idle'; }
   addr.disabled = miner.running;

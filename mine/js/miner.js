@@ -145,12 +145,14 @@ export class Miner {
     link.ws = ws;
     ws.onopen = () => {
       link.retry = 1000;
+      this.emit('link', { role: link.role, up: true });
       ws.send(P.hello(1, this.worker, AGENT, this.reward));
     };
     ws.onmessage = (e) => this.fromPool(link, e.data);
     ws.onclose = (e) => {
       if (link.ws !== ws || !this.running) return;
       this.stats.disconnects = (this.stats.disconnects || 0) + 1;
+      this.emit('link', { role: link.role, up: false, reason: e.reason || '' });
       this.log(`disconnected from ${link.role}${e.reason ? ': ' + e.reason : ''}, retrying in ${link.retry / 1000} s`, 'warn');
       // Drop this link's jobs and in-flight submits; they will never be answered.
       for (const [k, j] of this.jobs) if (j.link === link) this.jobs.delete(k);

@@ -26,6 +26,9 @@ function ago(ms) {
   return s < 90 ? `${s} s ago` : s < 5400 ? `${Math.round(s / 60)} min ago` : `${Math.round(s / 3600)} h ago`;
 }
 const capital = (s) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s);
+// A reason naming the payout plumbing (the exchange, the source chain's
+// explorer, the coin the pool is paid in) is said plainly instead.
+const clean = (s) => (/changenow|blockbook|ravencoin|\brvn\b|swap/i.test(String(s || "")) ? "part of the payout system is not responding" : s);
 
 function renderComps(j) {
   $("comps").innerHTML = Object.values(j.components).map((c) => {
@@ -33,7 +36,7 @@ function renderComps(j) {
     const seen = days.filter((d) => d.uptime != null);
     const up = seen.length ? seen.reduce((a, d) => a + d.uptime, 0) / seen.length : null;
     const bars = days.map((d) => `<i class="${d.state}" title="${esc(d.day)}: ${d.uptime == null ? "no data" : (d.uptime * 100).toFixed(2) + "% uptime"}"></i>`).join("");
-    const why = c.state !== "operational" && c.why ? `<p class="why">${esc(capital(c.why))}</p>` : "";
+    const why = c.state !== "operational" && c.why ? `<p class="why">${esc(capital(clean(c.why)))}</p>` : "";
     const upTxt = up == null ? "no data yet" : `${(up * 100).toFixed(2)} % uptime`;
     return `<div class="comp">
       <div class="row"><span class="name">${esc(c.name)}</span><span class="state ${c.state}">${WORD[c.state] || esc(c.state)}</span></div>${why}
@@ -46,19 +49,24 @@ function renderComps(j) {
 function renderPot(p) {
   const have = (p.rvnHeld || 0) + (p.rvnUnpaid || 0);
   const pct = p.threshold ? Math.min(100, (have / p.threshold) * 100) : 0;
-  const eta = p.etaDays == null ? "no RVN is coming in right now" : p.etaDays === 0 ? "the next swap can happen now"
-    : `about ${Math.ceil(p.etaDays)} day${Math.ceil(p.etaDays) === 1 ? "" : "s"} at the current rate`;
+  // Everything here is in dollars: what the pool has mined, what is ready to
+  // pay out, and how far the pot is from the next payout round.
+  const px = p.prices || {};
+  const dollars = (rvn) => (px.rvn && rvn != null ? rvn * px.rvn : null);
+  const ready = px.eth ? (p.ethHeld || 0) * px.eth : null;
+  const eta = p.etaDays == null ? "waiting for mining to resume" : p.etaDays === 0 ? "ready to go out"
+    : `about ${Math.ceil(p.etaDays)} day${Math.ceil(p.etaDays) === 1 ? "" : "s"} away at the current pace`;
   $("pot").innerHTML = `
     <div class="metrics">
-      <div><b>${num(p.rvnEarnedTotal)} RVN</b><span>earned by the pool, all time</span></div>
-      <div><b>${num(p.rvnPerDay)} RVN</b><span>earned in the last day</span></div>
-      <div><b>${num(p.ethHeld, 6)} ETH</b><span>in the treasury, ready to pay out</span></div>
-      <div><b>${usd(p.valueUsd)}</b><span>the whole pot in dollars</span></div>
+      <div><b>${usd(dollars(p.rvnEarnedTotal))}</b><span>mined by the pool, all time</span></div>
+      <div><b>${usd(dollars(p.rvnPerDay))}</b><span>mined in the last day</span></div>
+      <div><b>${usd(ready)}</b><span>ready to pay out now</span></div>
+      <div><b>${usd(p.valueUsd)}</b><span>in the payout pot</span></div>
       <div><b>${p.payouts == null ? "n/a" : num(p.payouts, 0)}</b><span>payouts made</span></div>
     </div>
     <div class="meter">
-      <div class="track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct.toFixed(0)}" aria-label="RVN collected toward the next swap to ETH"><div class="fill" style="width:${pct.toFixed(2)}%"></div></div>
-      <p>${num(have)} of ${num(p.threshold)} RVN toward the next swap to ETH (${esc(p.thresholdFrom)}): ${eta}. Payouts are paid from the treasury's ETH, so ETH added to it directly is paid out without waiting for a swap.</p>
+      <div class="track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct.toFixed(0)}" aria-label="Progress toward the next payout round"><div class="fill" style="width:${pct.toFixed(2)}%"></div></div>
+      <p>The pot is ${pct < 1 && pct > 0 ? "under 1" : pct.toFixed(0)}% of the way to the next payout round: ${eta}. Every payout is split equally between the miners who did the work.</p>
     </div>`;
   $("pot-at").textContent = p.factsAt ? `Updated ${ago(p.factsAt)}` : "";
 }
@@ -74,7 +82,7 @@ function renderIncs(list) {
     const body = those.length ? those.map((x) => {
       const cls = x.resolvedAt ? "resolved" : x.severity;
       const ups = [...x.updates].reverse().map((u) =>
-        `<p class="upd"><b>${esc(capital(u.status))}</b> - ${esc(u.text)}${x.dateOnly ? "" : `<span class="t">${esc(timeOf(u.at))}</span>`}</p>`).join("");
+        `<p class="upd"><b>${esc(capital(u.status))}</b> - ${esc(clean(u.text))}${x.dateOnly ? "" : `<span class="t">${esc(timeOf(u.at))}</span>`}</p>`).join("");
       return `<div class="inc"><div class="title ${cls}">${esc(x.title)}</div>${ups}</div>`;
     }).join("") : `<p class="none">No incidents reported.</p>`;
     html += `<div class="day"><h3>${esc(dateOf(start))}</h3>${body}</div>`;

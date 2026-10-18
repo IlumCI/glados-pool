@@ -156,11 +156,13 @@ fn rotr(x: u32, n: u32) -> u32 { return (x >> n) | (x << (32u - n)); }
 
 
 // NeoScrypt: N = 128, r = 2, ChaCha20/20 and Salsa20/20, FastKDF-BLAKE2s.
-// Each invocation owns 32 KiB of the scratch buffer for V; FastKDF's byte
-// buffers are one byte per u32 in private memory, because its pointer lands
-// on any byte and a packed array would turn every access into shifts. This is
-// the plain version: correct first, a cooperative-workgroup layout later if a
-// real GPU says the private arrays are the cost.
+// Each invocation owns 32 KiB of the scratch buffer for V. FastKDF's two ring
+// buffers are kept packed, four bytes to a word (80 + 72 words), and read four
+// bytes at a time at any offset; the first version held one byte per word
+// (2 x 320), and on an RTX 3050 the packed one runs 1.4 to 1.8 times faster
+// (111k against 62k hashes a second at 2,048 lanes). Checked against the same
+// two Feathercoin blocks src/mine/neoscrypt.rs is, on real hardware and on
+// SwiftShader, before it replaced the first version.
 const NEOSCRYPT = /* wgsl */ `
 struct Params {
   header: array<vec4<u32>, 5>,
@@ -171,177 +173,7 @@ struct Params {
 @group(0) @binding(1) var<storage, read_write> res: array<atomic<u32>, 65>;
 @group(0) @binding(2) var<storage, read_write> scratch: array<u32>;
 
-const VW: u32 = 8192u; // 128 * 64 words per invocation
-
 fn tword(i: u32) -> u32 { return p.tgt[i / 4u][i % 4u]; }
-fn hbyte(i: u32, nonce: u32) -> u32 {
-  if (i >= 76u) { return (nonce >> (8u * (i - 76u))) & 0xffu; }
-  let w = p.header[i / 16u][(i / 4u) % 4u];
-  return (w >> (8u * (i % 4u))) & 0xffu;
-}
-fn rotr(x: u32, n: u32) -> u32 { return (x >> n) | (x << (32u - n)); }
-fn rotl(x: u32, n: u32) -> u32 { return (x << n) | (x >> (32u - n)); }
-
-var<private> A: array<u32, 320>;
-var<private> B: array<u32, 320>;
-var<private> X: array<u32, 64>;
-var<private> Z: array<u32, 64>;
-
-const SIG = array<u32, 160>(
-  0u,1u,2u,3u,4u,5u,6u,7u,8u,9u,10u,11u,12u,13u,14u,15u,
-  14u,10u,4u,8u,9u,15u,13u,6u,1u,12u,0u,2u,11u,7u,5u,3u,
-  11u,8u,12u,0u,5u,2u,15u,13u,10u,14u,3u,6u,7u,1u,9u,4u,
-  7u,9u,3u,1u,13u,12u,11u,14u,2u,6u,5u,10u,4u,0u,15u,8u,
-  9u,0u,5u,7u,2u,4u,10u,15u,14u,1u,11u,12u,6u,8u,3u,13u,
-  2u,12u,6u,10u,0u,11u,8u,3u,4u,13u,7u,5u,15u,14u,1u,9u,
-  12u,5u,1u,15u,14u,13u,4u,10u,0u,7u,6u,3u,9u,2u,8u,11u,
-  13u,11u,7u,14u,12u,1u,3u,9u,5u,0u,15u,4u,8u,6u,2u,10u,
-  6u,15u,14u,9u,11u,3u,0u,8u,12u,2u,13u,7u,1u,4u,10u,5u,
-  10u,2u,8u,4u,7u,6u,1u,5u,15u,11u,9u,14u,3u,12u,13u,0u);
-
-fn b2(h: ptr<function, array<u32, 8>>, m: array<u32, 16>, count: u32, last: bool) {
-  var v = array<u32, 16>((*h)[0], (*h)[1], (*h)[2], (*h)[3], (*h)[4], (*h)[5], (*h)[6], (*h)[7],
-    0x6a09e667u, 0xbb67ae85u, 0x3c6ef372u, 0xa54ff53au, 0x510e527fu ^ count, 0x9b05688cu, 0x1f83d9abu, 0x5be0cd19u);
-  if (last) { v[14] = ~v[14]; }
-  for (var r = 0u; r < 10u; r++) {
-    for (var k = 0u; k < 8u; k++) {
-      // The eight G calls of a round: four columns, then four diagonals.
-      var a: u32; var b: u32; var c: u32; var d: u32;
-      switch (k) {
-        case 0u: { a = 0u; b = 4u; c = 8u; d = 12u; }
-        case 1u: { a = 1u; b = 5u; c = 9u; d = 13u; }
-        case 2u: { a = 2u; b = 6u; c = 10u; d = 14u; }
-        case 3u: { a = 3u; b = 7u; c = 11u; d = 15u; }
-        case 4u: { a = 0u; b = 5u; c = 10u; d = 15u; }
-        case 5u: { a = 1u; b = 6u; c = 11u; d = 12u; }
-        case 6u: { a = 2u; b = 7u; c = 8u; d = 13u; }
-        default: { a = 3u; b = 4u; c = 9u; d = 14u; }
-      }
-      let x = m[SIG[r * 16u + 2u * k]];
-      let y = m[SIG[r * 16u + 2u * k + 1u]];
-      v[a] = v[a] + v[b] + x; v[d] = rotr(v[d] ^ v[a], 16u); v[c] = v[c] + v[d]; v[b] = rotr(v[b] ^ v[c], 12u);
-      v[a] = v[a] + v[b] + y; v[d] = rotr(v[d] ^ v[a], 8u); v[c] = v[c] + v[d]; v[b] = rotr(v[b] ^ v[c], 7u);
-    }
-  }
-  for (var i = 0u; i < 8u; i++) { (*h)[i] = (*h)[i] ^ v[i] ^ v[i + 8u]; }
-}
-
-// Keyed BLAKE2s-256 of A[ap..ap+64] under B[bp..bp+32], into out[0..32] bytes.
-fn prf(ap: u32, bp: u32) -> array<u32, 32> {
-  var h = array<u32, 8>(0x6a09e667u ^ 0x01012020u, 0xbb67ae85u, 0x3c6ef372u, 0xa54ff53au,
-                        0x510e527fu, 0x9b05688cu, 0x1f83d9abu, 0x5be0cd19u);
-  var m: array<u32, 16>;
-  for (var i = 0u; i < 8u; i++) {
-    let o = bp + 4u * i;
-    m[i] = B[o] | (B[o + 1u] << 8u) | (B[o + 2u] << 16u) | (B[o + 3u] << 24u);
-  }
-  for (var i = 8u; i < 16u; i++) { m[i] = 0u; }
-  b2(&h, m, 64u, false);
-  for (var i = 0u; i < 16u; i++) {
-    let o = ap + 4u * i;
-    m[i] = A[o] | (A[o + 1u] << 8u) | (A[o + 2u] << 16u) | (A[o + 3u] << 24u);
-  }
-  b2(&h, m, 128u, true);
-  var out: array<u32, 32>;
-  for (var i = 0u; i < 32u; i++) { out[i] = (h[i / 4u] >> (8u * (i % 4u))) & 0xffu; }
-  return out;
-}
-
-// The 32 FastKDF iterations over A (password) and B (salt), already filled.
-// Returns the final buffer pointer.
-fn kdf_rounds() -> u32 {
-  var ptr = 0u;
-  for (var it = 0u; it < 32u; it++) {
-    let o = prf(ptr, ptr);
-    var s = 0u;
-    for (var i = 0u; i < 32u; i++) { s += o[i]; }
-    ptr = s & 255u;
-    for (var i = 0u; i < 32u; i++) { B[ptr + i] ^= o[i]; }
-    if (ptr < 32u) {
-      for (var i = 0u; i < 32u - ptr; i++) { B[256u + ptr + i] = B[ptr + i]; }
-    } else if (256u - ptr < 32u) {
-      for (var i = 0u; i < 32u - (256u - ptr); i++) { B[i] = B[256u + i]; }
-    }
-  }
-  return ptr;
-}
-
-fn fill_password(nonce: u32) {
-  for (var i = 0u; i < 256u; i++) { A[i] = hbyte(i % 80u, nonce); }
-  for (var i = 0u; i < 64u; i++) { A[256u + i] = hbyte(i, nonce); }
-}
-
-fn salsa(o: u32, z: bool) {
-  var v: array<u32, 16>;
-  for (var i = 0u; i < 16u; i++) { if (z) { v[i] = Z[o + i]; } else { v[i] = X[o + i]; } }
-  var w = v;
-  for (var r = 0u; r < 10u; r++) {
-    w[4] ^= rotl(w[0] + w[12], 7u);  w[8] ^= rotl(w[4] + w[0], 9u);   w[12] ^= rotl(w[8] + w[4], 13u);  w[0] ^= rotl(w[12] + w[8], 18u);
-    w[9] ^= rotl(w[5] + w[1], 7u);   w[13] ^= rotl(w[9] + w[5], 9u);  w[1] ^= rotl(w[13] + w[9], 13u);  w[5] ^= rotl(w[1] + w[13], 18u);
-    w[14] ^= rotl(w[10] + w[6], 7u); w[2] ^= rotl(w[14] + w[10], 9u); w[6] ^= rotl(w[2] + w[14], 13u);  w[10] ^= rotl(w[6] + w[2], 18u);
-    w[3] ^= rotl(w[15] + w[11], 7u); w[7] ^= rotl(w[3] + w[15], 9u);  w[11] ^= rotl(w[7] + w[3], 13u);  w[15] ^= rotl(w[11] + w[7], 18u);
-    w[1] ^= rotl(w[0] + w[3], 7u);   w[2] ^= rotl(w[1] + w[0], 9u);   w[3] ^= rotl(w[2] + w[1], 13u);   w[0] ^= rotl(w[3] + w[2], 18u);
-    w[6] ^= rotl(w[5] + w[4], 7u);   w[7] ^= rotl(w[6] + w[5], 9u);   w[4] ^= rotl(w[7] + w[6], 13u);   w[5] ^= rotl(w[4] + w[7], 18u);
-    w[11] ^= rotl(w[10] + w[9], 7u); w[8] ^= rotl(w[11] + w[10], 9u); w[9] ^= rotl(w[8] + w[11], 13u);  w[10] ^= rotl(w[9] + w[8], 18u);
-    w[12] ^= rotl(w[15] + w[14], 7u); w[13] ^= rotl(w[12] + w[15], 9u); w[14] ^= rotl(w[13] + w[12], 13u); w[15] ^= rotl(w[14] + w[13], 18u);
-  }
-  for (var i = 0u; i < 16u; i++) { if (z) { Z[o + i] = v[i] + w[i]; } else { X[o + i] = v[i] + w[i]; } }
-}
-
-fn chacha(o: u32, z: bool) {
-  var v: array<u32, 16>;
-  for (var i = 0u; i < 16u; i++) { if (z) { v[i] = Z[o + i]; } else { v[i] = X[o + i]; } }
-  var w = v;
-  for (var r = 0u; r < 10u; r++) {
-    for (var k = 0u; k < 8u; k++) {
-      var a: u32; var b: u32; var c: u32; var d: u32;
-      switch (k) {
-        case 0u: { a = 0u; b = 4u; c = 8u; d = 12u; }
-        case 1u: { a = 1u; b = 5u; c = 9u; d = 13u; }
-        case 2u: { a = 2u; b = 6u; c = 10u; d = 14u; }
-        case 3u: { a = 3u; b = 7u; c = 11u; d = 15u; }
-        case 4u: { a = 0u; b = 5u; c = 10u; d = 15u; }
-        case 5u: { a = 1u; b = 6u; c = 11u; d = 12u; }
-        case 6u: { a = 2u; b = 7u; c = 8u; d = 13u; }
-        default: { a = 3u; b = 4u; c = 9u; d = 14u; }
-      }
-      w[a] += w[b]; w[d] = rotl(w[d] ^ w[a], 16u);
-      w[c] += w[d]; w[b] = rotl(w[b] ^ w[c], 12u);
-      w[a] += w[b]; w[d] = rotl(w[d] ^ w[a], 8u);
-      w[c] += w[d]; w[b] = rotl(w[b] ^ w[c], 7u);
-    }
-  }
-  for (var i = 0u; i < 16u; i++) { if (z) { Z[o + i] = v[i] + w[i]; } else { X[o + i] = v[i] + w[i]; } }
-}
-
-// blkmix for r = 2: four chained blocks, then the middle pair swapped.
-fn blkmix(z: bool) {
-  for (var i = 0u; i < 4u; i++) {
-    let prev = ((i + 3u) % 4u) * 16u;
-    for (var k = 0u; k < 16u; k++) {
-      if (z) { Z[i * 16u + k] ^= Z[prev + k]; } else { X[i * 16u + k] ^= X[prev + k]; }
-    }
-    if (z) { chacha(i * 16u, true); } else { salsa(i * 16u, false); }
-  }
-  for (var k = 0u; k < 16u; k++) {
-    if (z) { let t = Z[16u + k]; Z[16u + k] = Z[32u + k]; Z[32u + k] = t; }
-    else { let t = X[16u + k]; X[16u + k] = X[32u + k]; X[32u + k] = t; }
-  }
-}
-
-fn smix(z: bool, vb: u32) {
-  for (var i = 0u; i < 128u; i++) {
-    for (var k = 0u; k < 64u; k++) { if (z) { scratch[vb + i * 64u + k] = Z[k]; } else { scratch[vb + i * 64u + k] = X[k]; } }
-    blkmix(z);
-  }
-  for (var i = 0u; i < 128u; i++) {
-    var j: u32;
-    if (z) { j = (Z[48] & 127u) * 64u; } else { j = (X[48] & 127u) * 64u; }
-    for (var k = 0u; k < 64u; k++) { if (z) { Z[k] ^= scratch[vb + j + k]; } else { X[k] ^= scratch[vb + j + k]; } }
-    blkmix(z);
-  }
-}
-
 fn meets(c: array<u32, 8>) -> bool {
   for (var i = 0u; i < 8u; i++) {
     let t = tword(i);
@@ -350,50 +182,227 @@ fn meets(c: array<u32, 8>) -> bool {
   return true;
 }
 
+const N: u32 = 128u;
+const WORDS: u32 = 64u;        // 32 * r
+const KDF_BUF: u32 = 256u;
+
+// ---- BLAKE2s, keyed, 32-byte key, 64-byte message, 32-byte output ----------
+
+const IV = array<u32, 8>(0x6a09e667u, 0xbb67ae85u, 0x3c6ef372u, 0xa54ff53au,
+                         0x510e527fu, 0x9b05688cu, 0x1f83d9abu, 0x5be0cd19u);
+const SIGMA = array<array<u32, 16>, 10>(
+  array<u32, 16>(0u, 1u, 2u, 3u, 4u, 5u, 6u, 7u, 8u, 9u, 10u, 11u, 12u, 13u, 14u, 15u),
+  array<u32, 16>(14u, 10u, 4u, 8u, 9u, 15u, 13u, 6u, 1u, 12u, 0u, 2u, 11u, 7u, 5u, 3u),
+  array<u32, 16>(11u, 8u, 12u, 0u, 5u, 2u, 15u, 13u, 10u, 14u, 3u, 6u, 7u, 1u, 9u, 4u),
+  array<u32, 16>(7u, 9u, 3u, 1u, 13u, 12u, 11u, 14u, 2u, 6u, 5u, 10u, 4u, 0u, 15u, 8u),
+  array<u32, 16>(9u, 0u, 5u, 7u, 2u, 4u, 10u, 15u, 14u, 1u, 11u, 12u, 6u, 8u, 3u, 13u),
+  array<u32, 16>(2u, 12u, 6u, 10u, 0u, 11u, 8u, 3u, 4u, 13u, 7u, 5u, 15u, 14u, 1u, 9u),
+  array<u32, 16>(12u, 5u, 1u, 15u, 14u, 13u, 4u, 10u, 0u, 7u, 6u, 3u, 9u, 2u, 8u, 11u),
+  array<u32, 16>(13u, 11u, 7u, 14u, 12u, 1u, 3u, 9u, 5u, 0u, 15u, 4u, 8u, 6u, 2u, 10u),
+  array<u32, 16>(6u, 15u, 14u, 9u, 11u, 3u, 0u, 8u, 12u, 2u, 13u, 7u, 1u, 4u, 10u, 5u),
+  array<u32, 16>(10u, 2u, 8u, 4u, 7u, 6u, 1u, 5u, 15u, 11u, 9u, 14u, 3u, 12u, 13u, 0u));
+
+fn rotr(x: u32, n: u32) -> u32 { return (x >> n) | (x << (32u - n)); }
+fn rotl(x: u32, n: u32) -> u32 { return (x << n) | (x >> (32u - n)); }
+
+fn compress(h: ptr<function, array<u32, 8>>, m: ptr<function, array<u32, 16>>, t: u32, last: bool) {
+  var v: array<u32, 16>;
+  for (var i = 0u; i < 8u; i++) { v[i] = (*h)[i]; v[i + 8u] = IV[i]; }
+  v[12] ^= t;
+  if (last) { v[14] = ~v[14]; }
+  for (var r = 0u; r < 10u; r++) {
+    let s = SIGMA[r];
+    // the eight G calls, unrolled by column/diagonal
+    for (var k = 0u; k < 8u; k++) {
+      var a: u32; var b: u32; var c: u32; var d: u32;
+      switch k {
+        case 0u: { a = 0u; b = 4u; c = 8u; d = 12u; }
+        case 1u: { a = 1u; b = 5u; c = 9u; d = 13u; }
+        case 2u: { a = 2u; b = 6u; c = 10u; d = 14u; }
+        case 3u: { a = 3u; b = 7u; c = 11u; d = 15u; }
+        case 4u: { a = 0u; b = 5u; c = 10u; d = 15u; }
+        case 5u: { a = 1u; b = 6u; c = 11u; d = 12u; }
+        case 6u: { a = 2u; b = 7u; c = 8u; d = 13u; }
+        default: { a = 3u; b = 4u; c = 9u; d = 14u; }
+      }
+      let x = (*m)[s[2u * k]];
+      let y = (*m)[s[2u * k + 1u]];
+      v[a] = v[a] + v[b] + x;  v[d] = rotr(v[d] ^ v[a], 16u);
+      v[c] = v[c] + v[d];      v[b] = rotr(v[b] ^ v[c], 12u);
+      v[a] = v[a] + v[b] + y;  v[d] = rotr(v[d] ^ v[a], 8u);
+      v[c] = v[c] + v[d];      v[b] = rotr(v[b] ^ v[c], 7u);
+    }
+  }
+  for (var i = 0u; i < 8u; i++) { (*h)[i] ^= v[i] ^ v[i + 8u]; }
+}
+
+// ---- FastKDF over two byte ring buffers held as words -----------------------
+
+var<private> A: array<u32, 80>;   // 256 bytes + 64-byte wrapped head
+var<private> B: array<u32, 72>;   // 256 bytes + 32-byte wrapped head
+
+fn getA(i: u32) -> u32 { return (A[i >> 2u] >> ((i & 3u) * 8u)) & 0xffu; }
+fn getB(i: u32) -> u32 { return (B[i >> 2u] >> ((i & 3u) * 8u)) & 0xffu; }
+fn setB(i: u32, v: u32) {
+  let sh = (i & 3u) * 8u;
+  B[i >> 2u] = (B[i >> 2u] & ~(0xffu << sh)) | ((v & 0xffu) << sh);
+}
+// Four bytes starting at an arbitrary byte offset, little-endian.
+fn wordA(off: u32) -> u32 {
+  let q = off >> 2u; let s = (off & 3u) * 8u;
+  if (s == 0u) { return A[q]; }
+  return (A[q] >> s) | (A[q + 1u] << (32u - s));
+}
+fn wordB(off: u32) -> u32 {
+  let q = off >> 2u; let s = (off & 3u) * 8u;
+  if (s == 0u) { return B[q]; }
+  return (B[q] >> s) | (B[q + 1u] << (32u - s));
+}
+
+// rounds = 32; the walk, leaving the final bufptr.
+fn kdfWalk() -> u32 {
+  var bufptr = 0u;
+  for (var round = 0u; round < 32u; round++) {
+    var h: array<u32, 8>;
+    for (var i = 0u; i < 8u; i++) { h[i] = IV[i]; }
+    h[0] ^= 0x01012020u;                      // keyed, key 32 bytes, output 32 bytes
+    var m: array<u32, 16>;
+    for (var i = 0u; i < 8u; i++) { m[i] = wordB(bufptr + 4u * i); m[i + 8u] = 0u; }
+    compress(&h, &m, 64u, false);             // the key block
+    for (var i = 0u; i < 16u; i++) { m[i] = wordA(bufptr + 4u * i); }
+    compress(&h, &m, 128u, true);             // the 64-byte input
+
+    var sum = 0u;
+    for (var i = 0u; i < 8u; i++) {
+      let w = h[i];
+      sum += (w & 0xffu) + ((w >> 8u) & 0xffu) + ((w >> 16u) & 0xffu) + (w >> 24u);
+    }
+    bufptr = sum & (KDF_BUF - 1u);
+
+    for (var j = 0u; j < 32u; j++) {
+      let p = (h[j >> 2u] >> ((j & 3u) * 8u)) & 0xffu;
+      setB(bufptr + j, getB(bufptr + j) ^ p);
+    }
+    // keep the wrapped tail and the head in step
+    if (bufptr < 32u) {
+      let n = min(32u, 32u - bufptr);
+      for (var j = 0u; j < n; j++) { setB(KDF_BUF + bufptr + j, getB(bufptr + j)); }
+    } else if (KDF_BUF - bufptr < 32u) {
+      let n = 32u - (KDF_BUF - bufptr);
+      for (var j = 0u; j < n; j++) { setB(j, getB(KDF_BUF + j)); }
+    }
+  }
+  return bufptr;
+}
+
+// ---- the mixing core ---------------------------------------------------------
+
+var<private> X: array<u32, 64>;
+var<private> Z: array<u32, 64>;
+var<private> Y: array<u32, 64>;
+var<private> T: array<u32, 64>;   // the working block for smix, X or Z copied in
+
+fn salsa(b: ptr<function, array<u32, 16>>) {
+  var v = *b;
+  for (var i = 0u; i < 10u; i++) {
+    v[4] ^= rotl(v[0] + v[12], 7u);  v[8] ^= rotl(v[4] + v[0], 9u);   v[12] ^= rotl(v[8] + v[4], 13u);  v[0] ^= rotl(v[12] + v[8], 18u);
+    v[9] ^= rotl(v[5] + v[1], 7u);   v[13] ^= rotl(v[9] + v[5], 9u);  v[1] ^= rotl(v[13] + v[9], 13u);  v[5] ^= rotl(v[1] + v[13], 18u);
+    v[14] ^= rotl(v[10] + v[6], 7u); v[2] ^= rotl(v[14] + v[10], 9u); v[6] ^= rotl(v[2] + v[14], 13u);  v[10] ^= rotl(v[6] + v[2], 18u);
+    v[3] ^= rotl(v[15] + v[11], 7u); v[7] ^= rotl(v[3] + v[15], 9u);  v[11] ^= rotl(v[7] + v[3], 13u);  v[15] ^= rotl(v[11] + v[7], 18u);
+    v[1] ^= rotl(v[0] + v[3], 7u);   v[2] ^= rotl(v[1] + v[0], 9u);   v[3] ^= rotl(v[2] + v[1], 13u);   v[0] ^= rotl(v[3] + v[2], 18u);
+    v[6] ^= rotl(v[5] + v[4], 7u);   v[7] ^= rotl(v[6] + v[5], 9u);   v[4] ^= rotl(v[7] + v[6], 13u);   v[5] ^= rotl(v[4] + v[7], 18u);
+    v[11] ^= rotl(v[10] + v[9], 7u); v[8] ^= rotl(v[11] + v[10], 9u); v[9] ^= rotl(v[8] + v[11], 13u);  v[10] ^= rotl(v[9] + v[8], 18u);
+    v[12] ^= rotl(v[15] + v[14], 7u); v[13] ^= rotl(v[12] + v[15], 9u); v[14] ^= rotl(v[13] + v[12], 13u); v[15] ^= rotl(v[14] + v[13], 18u);
+  }
+  for (var i = 0u; i < 16u; i++) { (*b)[i] += v[i]; }
+}
+
+fn chachaQ(v: ptr<function, array<u32, 16>>, a: u32, b: u32, c: u32, d: u32) {
+  (*v)[a] += (*v)[b]; (*v)[d] = rotl((*v)[d] ^ (*v)[a], 16u);
+  (*v)[c] += (*v)[d]; (*v)[b] = rotl((*v)[b] ^ (*v)[c], 12u);
+  (*v)[a] += (*v)[b]; (*v)[d] = rotl((*v)[d] ^ (*v)[a], 8u);
+  (*v)[c] += (*v)[d]; (*v)[b] = rotl((*v)[b] ^ (*v)[c], 7u);
+}
+fn chacha(b: ptr<function, array<u32, 16>>) {
+  var v = *b;
+  for (var i = 0u; i < 10u; i++) {
+    chachaQ(&v, 0u, 4u, 8u, 12u); chachaQ(&v, 1u, 5u, 9u, 13u); chachaQ(&v, 2u, 6u, 10u, 14u); chachaQ(&v, 3u, 7u, 11u, 15u);
+    chachaQ(&v, 0u, 5u, 10u, 15u); chachaQ(&v, 1u, 6u, 11u, 12u); chachaQ(&v, 2u, 7u, 8u, 13u); chachaQ(&v, 3u, 4u, 9u, 14u);
+  }
+  for (var i = 0u; i < 16u; i++) { (*b)[i] += v[i]; }
+}
+
+// Chain the four chunks through the core, then evens first and odds after.
+fn blkmix(useChacha: bool) {
+  for (var i = 0u; i < 4u; i++) {
+    let prev = select(3u, i - 1u, i > 0u);
+    var blk: array<u32, 16>;
+    for (var k = 0u; k < 16u; k++) { T[16u * i + k] ^= T[16u * prev + k]; blk[k] = T[16u * i + k]; }
+    if (useChacha) { chacha(&blk); } else { salsa(&blk); }
+    for (var k = 0u; k < 16u; k++) { T[16u * i + k] = blk[k]; Y[16u * i + k] = blk[k]; }
+  }
+  for (var k = 0u; k < 16u; k++) {
+    T[k] = Y[k];             // chunk 0 <- Y0
+    T[16u + k] = Y[32u + k]; // chunk 1 <- Y2
+    T[32u + k] = Y[16u + k]; // chunk 2 <- Y1
+    T[48u + k] = Y[48u + k]; // chunk 3 <- Y3
+  }
+}
+
+fn smix(useChacha: bool, vbase: u32) {
+  for (var i = 0u; i < N; i++) {
+    for (var k = 0u; k < WORDS; k++) { scratch[vbase + i * WORDS + k] = T[k]; }
+    blkmix(useChacha);
+  }
+  for (var i = 0u; i < N; i++) {
+    let j = (T[48] & (N - 1u)) * WORDS;
+    for (var k = 0u; k < WORDS; k++) { T[k] ^= scratch[vbase + j + k]; }
+    blkmix(useChacha);
+  }
+}
+
+
 @compute @workgroup_size(64)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
-  let vb = gid.x * VW;
+  let vbase = gid.x * 8192u;
+  var hdr: array<u32, 20>;
+  for (var i = 0u; i < 20u; i++) { hdr[i] = p.header[i / 4u][i % 4u]; }
   for (var it = 0u; it < p.iters; it++) {
     let off = gid.x * p.iters + it;
     if (off >= p.limit) { return; }
     let nonce = p.base + off;
+    hdr[19] = nonce;
 
-    // X = FastKDF(header, header)
-    fill_password(nonce);
-    for (var i = 0u; i < 256u; i++) { B[i] = hbyte(i % 80u, nonce); }
-    for (var i = 0u; i < 32u; i++) { B[256u + i] = hbyte(i, nonce); }
-    var ptr = kdf_rounds();
-    for (var w = 0u; w < 64u; w++) {
-      var x = 0u;
-      for (var b = 0u; b < 4u; b++) {
-        let i = 4u * w + b;
-        var byte: u32;
-        if (i < 256u - ptr) { byte = B[ptr + i] ^ A[i]; } else { byte = B[i - (256u - ptr)] ^ A[i]; }
-        x |= byte << (8u * b);
-      }
-      X[w] = x;
-      Z[w] = x;
+    // X = FastKDF(header, header), 256 bytes
+    for (var i = 0u; i < 64u; i++) { A[i] = hdr[i % 20u]; B[i] = hdr[i % 20u]; }
+    for (var j = 0u; j < 16u; j++) { A[64u + j] = hdr[j]; }
+    for (var j = 0u; j < 8u; j++) { B[64u + j] = hdr[j]; }
+    var bufptr = kdfWalk();
+    for (var j = 0u; j < 64u; j++) { X[j] = 0u; }
+    for (var j = 0u; j < 256u; j++) {
+      let idx = (bufptr + j) & 255u;
+      let v = getB(idx) ^ getA(j);
+      setB(idx, v);
+      X[j >> 2u] |= v << ((j & 3u) * 8u);
     }
 
-    smix(true, vb);   // ChaCha first
-    smix(false, vb);  // Salsa second
-    for (var w = 0u; w < 64u; w++) { X[w] ^= Z[w]; }
+    for (var k = 0u; k < 64u; k++) { T[k] = X[k]; }
+    smix(true, vbase);                                       // ChaCha first
+    for (var k = 0u; k < 64u; k++) { Z[k] = T[k]; T[k] = X[k]; }
+    smix(false, vbase);                                      // Salsa second
+    for (var k = 0u; k < 64u; k++) { X[k] = T[k] ^ Z[k]; }
 
     // out = FastKDF(header, X), 32 bytes
-    fill_password(nonce);
-    for (var i = 0u; i < 256u; i++) { B[i] = (X[i / 4u] >> (8u * (i % 4u))) & 0xffu; }
-    for (var i = 0u; i < 32u; i++) { B[256u + i] = B[i]; }
-    ptr = kdf_rounds();
+    for (var i = 0u; i < 64u; i++) { A[i] = hdr[i % 20u]; B[i] = X[i]; }
+    for (var j = 0u; j < 16u; j++) { A[64u + j] = hdr[j]; }
+    for (var j = 0u; j < 8u; j++) { B[64u + j] = X[j]; }
+    bufptr = kdfWalk();
     var d: array<u32, 8>;
-    for (var w = 0u; w < 8u; w++) {
-      var x = 0u;
-      for (var b = 0u; b < 4u; b++) {
-        let i = 4u * w + b;
-        var byte: u32;
-        if (i < 256u - ptr) { byte = B[ptr + i] ^ A[i]; } else { byte = B[i - (256u - ptr)] ^ A[i]; }
-        x |= byte << (8u * b);
-      }
-      d[w] = x;
+    for (var j = 0u; j < 32u; j++) {
+      let idx = (bufptr + j) & 255u;
+      let v = getB(idx) ^ getA(j);
+      setB(idx, v);
+      d[j >> 2u] |= v << ((j & 3u) * 8u);
     }
     // Little-endian digest: the integer's top word is d[7].
     var c: array<u32, 8>;

@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GLaDOS Pool Status</title>
+<meta name="description" content="Live status of the GLaDOS mining pool: CPU mining, GPU mining, payouts, and the payout pot.">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; connect-src https://pool.aperture.institute http://127.0.0.1:* http://localhost:*; style-src 'unsafe-inline'; img-src 'self' data:; object-src 'none'; base-uri 'none'; form-action 'none'">
+<link rel="icon" type="image/svg+xml" href="img/logo.svg">
+<style>
+/* The pool's status, in the same Aperture chrome as the miner: deep water and
+   orange, square, monospace for figures. Every state is a word as well as a
+   colour, so nothing here depends on telling green from amber. */
+:root {
+  --bg0:#04202E; --bg1:#072A3C; --panel:#0C3A50; --well:#19303D;
+  --edge:#235066; --edge-2:#2F6A80;
+  --ink:#E7F2F8; --dim:#A6C3D0; --faint:#8AA8B6;
+  --accent:#F28C1E; --link:#FFD8A6;
+  --ok:#3FD27F; --warn:#F2B53A; --bad:#FF7A6B; --none:#2A4A5A;
+  --mono:"Cascadia Mono",Consolas,"Courier New",monospace;
+  --ui:"Segoe UI",Frutiger,"Frutiger Linotype",Tahoma,Verdana,Arial,sans-serif;
+  --cap:linear-gradient(180deg,#B4600A 0%,#A85A08 47%,#A25507 50.2%,#8E4708 50.6%,#A85A0C 100%);
+  --cap-edge:#FFE0BC;
+  --glass:linear-gradient(180deg,rgba(255,255,255,.14) 0%,rgba(255,255,255,.08) 47%,rgba(255,255,255,.04) 50.2%,rgba(0,0,0,.14) 50.6%,rgba(0,0,0,.05) 100%);
+}
+* { box-sizing: border-box; }
+body { margin: 0; min-height: 100vh; color: var(--ink); background: radial-gradient(120% 80% at 50% -10%, var(--bg1) 0%, var(--bg0) 70%); font: 14px/1.5 var(--ui); }
+a { color: var(--link); text-decoration: none; } a:hover { text-decoration: underline; }
+#bar { display: flex; align-items: center; gap: 10px; padding: 0 16px; height: 46px; background-color: var(--bg1); background-image: var(--glass); border-bottom: 1px solid #04161F; }
+#bar img { width: 24px; height: 24px; display: block; }
+#bar .name { font-weight: 600; }
+#bar .links { margin-left: auto; display: flex; gap: 14px; font-size: 13px; }
+main { max-width: 980px; margin: 0 auto; padding: 18px 16px 40px; }
+
+.panel { background: var(--panel); border: 1px solid var(--edge); margin-top: 14px; }
+.panel > .head { font: 600 11px/1 var(--mono); letter-spacing: .14em; text-transform: uppercase; color: #fff; background: var(--cap); box-shadow: inset 0 1px 0 var(--cap-edge); padding: 7px 10px; display: flex; justify-content: space-between; gap: 10px; }
+.panel > .head span:last-child { letter-spacing: .04em; text-transform: none; font-weight: 400; }
+.panel > .body { padding: 14px; }
+
+/* The headline: the whole pool in one sentence. */
+#overall { display: flex; align-items: center; gap: 14px; padding: 18px; border: 1px solid var(--edge); background: var(--panel); }
+#overall .lamp { width: 14px; height: 14px; flex: none; background: var(--none); }
+#overall h1 { margin: 0; font-size: 22px; font-weight: 600; }
+#overall p { margin: 2px 0 0; color: var(--dim); font-size: 13px; }
+.s-operational .lamp { background: var(--ok); } .s-degraded .lamp { background: var(--warn); } .s-outage .lamp { background: var(--bad); }
+
+/* One row per component: name, state word, reason, then 90 days of bars. */
+.comp { padding: 14px 0; border-top: 1px solid var(--edge); }
+.comp:first-child { border-top: 0; padding-top: 0; }
+.comp .top { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.comp .top b { font-size: 15px; }
+.state { font: 600 12px var(--mono); letter-spacing: .06em; text-transform: uppercase; }
+.state.operational { color: var(--ok); } .state.degraded { color: var(--warn); } .state.outage { color: var(--bad); }
+.comp .meta { margin-left: auto; font: 12px var(--mono); color: var(--faint); }
+.comp .why { margin: 4px 0 0; color: var(--dim); font-size: 13px; }
+.bars { display: grid; grid-template-columns: repeat(90, 1fr); gap: 2px; height: 30px; margin-top: 10px; }
+.bars i { display: block; background: var(--none); }
+.bars i.operational { background: var(--ok); } .bars i.degraded { background: var(--warn); } .bars i.outage { background: var(--bad); }
+.axis { display: flex; justify-content: space-between; font: 11px var(--mono); color: var(--faint); margin-top: 4px; }
+
+/* The payout pot. */
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 1px; background: var(--edge); border: 1px solid var(--edge); }
+.grid > div { background: var(--panel); padding: 10px 12px; }
+.grid b { display: block; font: 600 18px var(--mono); font-variant-numeric: tabular-nums; }
+.grid span { font-size: 12px; color: var(--dim); }
+.meter { margin-top: 14px; }
+.meter .track { height: 12px; background: var(--well); border: 1px solid var(--edge); }
+.meter .fill { height: 100%; width: 0; background: var(--accent); }
+.meter p { margin: 6px 0 0; font-size: 13px; color: var(--dim); }
+.note { margin: 12px 0 0; font-size: 13px; color: var(--dim); border-left: 3px solid var(--accent); padding: 4px 0 4px 10px; }
+
+/* Incidents. */
+.inc { padding: 12px 0; border-top: 1px solid var(--edge); }
+.inc:first-child { border-top: 0; padding-top: 0; }
+.inc h3 { margin: 0; font-size: 15px; }
+.inc .when { font: 12px var(--mono); color: var(--faint); margin-top: 2px; }
+.inc ol { list-style: none; margin: 8px 0 0; padding: 0; }
+.inc li { margin: 6px 0 0; font-size: 13px; color: var(--dim); }
+.inc li b { font: 600 11px var(--mono); letter-spacing: .06em; text-transform: uppercase; color: var(--ink); margin-right: 6px; }
+.empty { color: var(--faint); font-size: 13px; margin: 0; }
+
+#feed { margin-top: 10px; font: 12px var(--mono); color: var(--faint); }
+#feed.err { color: var(--bad); }
+footer { max-width: 980px; margin: 0 auto; padding: 0 16px 30px; font-size: 12px; color: var(--faint); }
+
+@media (max-width: 640px) {
+  #bar .links a.hide-sm { display: none; }
+  .bars { grid-template-columns: repeat(30, 1fr); }
+  .bars i:nth-child(-n+60) { display: none; }
+  .comp .meta { margin-left: 0; width: 100%; }
+}
+</style>
+</head>
+<body>
+<div id="bar">
+  <img src="img/logo.svg" alt="Aperture mark">
+  <span class="name">GLaDOS Pool Status</span>
+  <span class="links"><a href="https://mine.aperture.institute/">Mine</a><a class="hide-sm" href="https://glados.aperture.institute/pool/">Pool</a><a class="hide-sm" href="https://pool.aperture.institute/payouts.json">payouts.json</a></span>
+</div>
+
+<main>
+  <div id="overall" class="s-loading" role="status" aria-live="polite">
+    <div class="lamp"></div>
+    <div><h1 id="ov-title">Checking the pool…</h1><p id="ov-sub">Reading the live status feed.</p></div>
+  </div>
+  <p id="feed"></p>
+
+  <section class="panel">
+    <div class="head"><span>Components</span><span>last 90 days</span></div>
+    <div class="body" id="comps"><p class="empty">Waiting for the first reading.</p></div>
+  </section>
+
+  <section class="panel">
+    <div class="head"><span>Payout pot</span><span id="pot-at"></span></div>
+    <div class="body" id="pot"><p class="empty">Waiting for the first reading.</p></div>
+  </section>
+
+  <section class="panel">
+    <div class="head"><span>Incidents</span><span>most recent first</span></div>
+    <div class="body" id="incs"><p class="empty">Waiting for the first reading.</p></div>
+  </section>
+</main>
+<footer>Checked once a minute from Cloudflare's edge. Times are in your local time zone. Nothing on this page is investment advice.</footer>
+
+<script src="status.js"></script>
+</body>
+</html>

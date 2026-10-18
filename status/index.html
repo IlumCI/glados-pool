@@ -25,25 +25,25 @@ a { color: #1a6fb3; }
 
 header { padding: 34px 0 26px; display: flex; align-items: center; gap: 12px; }
 header img { width: 36px; height: 36px; display: block; }
-header .co { font-size: 22px; font-weight: 600; letter-spacing: -.01em; }
+header .co { font-size: 24px; font-weight: 600; letter-spacing: -.01em; }
 header .co span { color: var(--dim); font-weight: 400; }
 header nav { margin-left: auto; display: flex; gap: 10px; }
-header nav a { font-size: 14px; text-decoration: none; padding: 7px 14px; border: 1px solid var(--line); border-radius: 4px; color: var(--ink); }
+header nav a { font-size: 15px; text-decoration: none; padding: 7px 14px; border: 1px solid var(--line); border-radius: 4px; color: var(--ink); }
 header nav a.primary { background: var(--brand); border-color: var(--brand); color: #fff; }
 
 /* The one line for the whole service. */
 #banner { border-radius: 4px; padding: 16px 20px; color: #fff; font-size: 19px; font-weight: 600; background: #6b7680; }
 #banner.operational { background: var(--ok-t); } #banner.degraded { background: var(--warn-t); } #banner.outage { background: var(--bad-t); }
-#banner small { display: block; font-size: 13px; font-weight: 400; opacity: .92; margin-top: 2px; }
+#banner small { display: block; font-size: 12px; font-weight: 400; opacity: .92; margin-top: 2px; }
 
-.caption { margin: 34px 0 8px; display: flex; justify-content: space-between; font-size: 13px; color: var(--dim); }
+.caption { margin: 34px 0 8px; display: flex; justify-content: space-between; font-size: 12px; color: var(--dim); }
 .box { border: 1px solid var(--line); border-radius: 4px; }
 .comp { padding: 18px 20px; border-top: 1px solid var(--line); }
 .comp:first-child { border-top: 0; }
 .comp .row { display: flex; align-items: baseline; gap: 12px; }
 .comp .name { font-weight: 600; }
-.comp .why { color: var(--dim); font-size: 13px; margin: 3px 0 0; }
-.state { margin-left: auto; font-size: 14px; font-weight: 600; white-space: nowrap; }
+.comp .why { color: var(--dim); font-size: 12px; margin: 3px 0 0; }
+.state { margin-left: auto; font-size: 15px; font-weight: 600; white-space: nowrap; }
 .state.operational { color: var(--ok-t); } .state.degraded { color: var(--warn-t); } .state.outage { color: var(--bad-t); }
 .bars { display: grid; grid-template-columns: repeat(90, 1fr); gap: 2px; height: 34px; margin-top: 12px; }
 .bars i { display: block; border-radius: 1px; background: var(--none); }
@@ -54,27 +54,27 @@ header nav a.primary { background: var(--brand); border-color: var(--brand); col
 /* The payout pot, as the page's metrics. */
 .metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }
 .metrics > div { padding: 16px 20px; border-top: 1px solid var(--line); border-left: 1px solid var(--line); margin: -1px 0 0 -1px; }
-.metrics b { display: block; font-size: 20px; font-weight: 600; font-variant-numeric: tabular-nums; }
-.metrics span { font-size: 13px; color: var(--dim); }
+.metrics b { display: block; font-size: 19px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.metrics span { font-size: 12px; color: var(--dim); }
 .meter { padding: 16px 20px; border-top: 1px solid var(--line); }
 .meter .track { height: 8px; background: var(--soft); border: 1px solid var(--line); border-radius: 4px; overflow: hidden; }
 .meter .fill { height: 100%; width: 0; background: var(--brand); }
-.meter p { margin: 8px 0 0; font-size: 14px; color: var(--dim); }
+.meter p { margin: 8px 0 0; font-size: 15px; color: var(--dim); }
 
 /* Past incidents, a heading per day. */
-h2 { font-size: 22px; font-weight: 600; margin: 48px 0 6px; }
+h2 { font-size: 24px; font-weight: 600; margin: 48px 0 6px; }
 .day { padding: 16px 0 6px; border-bottom: 1px solid var(--line); }
-.day h3 { font-size: 16px; font-weight: 600; margin: 0 0 8px; }
-.day .none { color: var(--faint); font-size: 14px; margin: 0 0 10px; }
+.day h3 { font-size: 15px; font-weight: 600; margin: 0 0 8px; }
+.day .none { color: var(--faint); font-size: 15px; margin: 0 0 10px; }
 .inc { margin: 0 0 16px; }
-.inc .title { font-size: 16px; font-weight: 600; }
+.inc .title { font-size: 15px; font-weight: 600; }
 .inc .title.outage { color: var(--bad-t); } .inc .title.degraded { color: var(--warn-t); } .inc .title.resolved { color: var(--ink); }
-.upd { margin: 8px 0 0; font-size: 14px; }
+.upd { margin: 8px 0 0; font-size: 15px; }
 .upd b { font-weight: 600; }
 .upd .t { display: block; color: var(--faint); font-size: 12px; }
 
-#feed { margin: 10px 0 0; font-size: 13px; color: var(--bad-t); }
-footer { margin: 44px 0 50px; display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; font-size: 13px; color: var(--faint); }
+#feed { margin: 10px 0 0; font-size: 12px; color: var(--bad-t); }
+footer { margin: 44px 0 50px; display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; font-size: 12px; color: var(--faint); }
 
 @media (max-width: 640px) {
   header { flex-wrap: wrap; padding: 24px 0 18px; }

@@ -83,15 +83,15 @@ function fmtAmount(v) {
 // before the first figure, the one chosen in the form.
 function renderEarn(d) {
   const code = (d && d.asset) || document.getElementById('reward').value;
-  const [name, ticker] = ASSETS[code] || ASSETS.glados;
-  const rev = d && d.revenue;
-  // The line appears only once the pool reports a figure; until then it is
-  // hidden rather than showing a dash, since the browser never invents one.
+  const [name] = ASSETS[code] || ASSETS.glados;
+  // The dollar value of this wallet's share of the pot, the pool's own figure.
+  // Shown only once the pool reports one; never invented here.
+  const usd = d && d.usd;
   const el = document.getElementById('s-earn');
-  el.style.display = rev != null ? '' : 'none';
-  if (rev == null) return;
-  document.getElementById('s-earn-val').textContent = `${fmtAmount(rev)} ${ticker}`;
-  document.getElementById('s-earn-cap').textContent = `your mining revenue so far in ${name}, before power costs`;
+  el.style.display = usd != null ? '' : 'none';
+  if (usd == null) return;
+  document.getElementById('s-earn-val').textContent = `$${fmtAmount(usd)}`;
+  document.getElementById('s-earn-cap').textContent = `worth of ${name} so far, your equal share of the pot, before power`;
 }
 
 // A rough "N minutes/hours ago" from a timestamp in ms.
@@ -241,6 +241,26 @@ miner.on((kind, d) => {
 });
 renderOutage(); // a visitor learns about trouble before pressing start
 setInterval(() => { if (linkDown.size || !$('outage').hidden) renderOutage(); }, 60_000);
+
+// The whole pool, mining as one: the combined hashrate of every miner and how
+// many there are. Read from the pool's own /status, which sums it across every
+// connection. Shown whether or not this browser is mining, so the collective
+// power is visible on arrival.
+async function renderPool() {
+  const el = $('s-pool');
+  if (!POOL_HTTP) { el.style.display = 'none'; return; }
+  try {
+    const r = await fetch(`${POOL_HTTP}/status?_=${Date.now()}`, { cache: 'no-store' });
+    if (!r.ok) throw new Error('status ' + r.status);
+    const s = await r.json();
+    const hs = Number(s.hashrate) || 0, n = Number(s.miners ?? s.connections) || 0;
+    if (n <= 0) { el.style.display = 'none'; return; }
+    el.innerHTML = `⚡ <b>${fmtRate(hs)}</b> <span>combined · ${n} miner${n === 1 ? '' : 's'} mining as one</span>`;
+    el.style.display = '';
+  } catch { el.style.display = 'none'; }
+}
+renderPool();
+setInterval(renderPool, 15_000);
 
 const addr = $('addr');
 const go = $('go');

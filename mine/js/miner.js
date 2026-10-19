@@ -84,6 +84,9 @@ export class Miner {
     if (this.useGpu) this.gpu = this.spawn('./gpu-worker.js', 'gpu');
     this.tick = setInterval(() => this.sample(), 1000);
     this.drainer = setInterval(() => this.drain(), 1000 / SUBMIT_RATE);
+    // Report this device's hashrate so the pool can show the combined figure.
+    // On its own socket per device, so the pool's cross-shard sum is the total.
+    this.rateTimer = setInterval(() => this.reportRates(), 10_000);
     for (const link of this.links) this.connect(link);
     this.log(`${this.threads} CPU thread(s), ${this.wasm.includes('simd') ? 'SIMD' : 'baseline'} build${this.gpuLink ? '; GPU on a second connection' : ''}`);
   }
@@ -120,6 +123,7 @@ export class Miner {
     if (!this.running) return;
     clearInterval(this.tick);
     clearInterval(this.drainer);
+    clearInterval(this.rateTimer);
     for (const link of this.links) {
       clearTimeout(link.reconnect);
       if (link.ws) link.ws.close();
@@ -198,6 +202,7 @@ export class Miner {
       if (e) {
         this.stats.revenue = e.value;
         this.stats.asset = e.asset;
+        if (e.usd !== undefined) this.stats.usd = e.usd;
         // Payout facts, when the pool sends them; left as-is otherwise so a
         // message without them never erases what the page already shows.
         if (e.recipients !== undefined) this.stats.recipients = e.recipients;
@@ -409,5 +414,19 @@ export class Miner {
     this.stats.rate = this.stats.cpuRate + this.stats.gpuRate;
     this.window = { cpu: 0, gpu: 0, t: now };
     this.emit('stats', this.stats);
+  }
+
+  // Tell the pool this device's hashrate, for the combined-pool figure. Each
+  // link reports only its own device's rate; when the GPU shares the CPU link,
+  // the CPU link reports the sum. A display number, not mining work.
+  reportRates() {
+    if (!this.running) return;
+    const msg = (hs) => JSON.stringify({ method: 'glados.rate', params: { hs: Math.max(0, Math.round(hs)) } }) + '\n';
+    if (this.gpuLink) {
+      this.sendOn(this.cpuLink, msg(this.stats.cpuRate));
+      this.sendOn(this.gpuLink, msg(this.stats.gpuRate));
+    } else {
+      this.sendOn(this.cpuLink, msg(this.stats.cpuRate + this.stats.gpuRate));
+    }
   }
 }

@@ -1,24 +1,21 @@
 // Progress: the part a miner comes back for. It keeps a running, locally saved
-// tally of what this wallet has done and is estimated to have earned, and draws
-// it as a green line that climbs. Everything here is grounded in real activity:
-// the share counts and hashes are exactly what the miner reported, and the
-// earnings estimate is accepted-shares times a per-share rate -- the pool's own
-// rate (its revenue figure divided by the shares that earned it) once it has
-// sent one, a small nominal before that. It is an estimate, labelled as one,
-// never a claim of realised profit; it only ever goes up, because work only
-// accumulates. Saved per wallet and asset so a returning miner sees their line
-// where they left it.
+// tally of what this wallet has done, and shows the earnings the POOL actually
+// reports -- never an invented figure.
+//
+// The earnings number is the pool's own `glados.earn`: this wallet's equal
+// share of the real pot, valued in the chosen asset (what it would be paid if a
+// payout went out now). It is small, because the pool's income is small; that
+// is the truth, and it is better than a number we cannot pay. The first version
+// multiplied accepted shares by a made-up per-share rate, which showed tens of
+// dollars of a stock over a day when the real figure was a few millionths of a
+// share -- a number that reads as a scam the moment a payout does not match it.
+//
+// Shares, hashes and time are exactly what the miner reported, and carry the
+// sense of progress. Saved per wallet and asset. Key bumped to v2 so the old,
+// inflated lines are dropped rather than shown.
 
-const KEY = 'glados.progress.v1';
+const KEY = 'glados.progress.v2';
 const CAP = 160; // points kept for the chart
-
-// A small nominal per accepted share, used only until the pool reports a real
-// rate for this wallet. Deliberately modest; the shape of the climb is the
-// point, not the magnitude. Learned rate replaces it as soon as one exists.
-const NOMINAL = {
-  glados: 0.5, nvda: 0.00003, spcx: 0.00005, googl: 0.00002, amzn: 0.00002,
-  gme: 0.0004, spy: 0.00002, chips: 0.00003, os: 0.00003, index: 0.00002, metals: 0.0002,
-};
 
 const now = () => Date.now();
 const keyFor = (addr, asset) => `${KEY}.${(addr || 'anon').toLowerCase()}.${asset || 'glados'}`;
@@ -104,19 +101,16 @@ export class Progress {
   // A real wallet (not the anonymous local line) is what we sync.
   syncable() { return this.pool && /^0x[0-9a-f]{40}$/i.test(this.addr); }
 
-  // Merge the server's copy into ours by the maximum of every counter, so no
-  // device ever lowers the line; adopt the further-along series.
+  // Merge the server's copy into ours. Only the cumulative work counters cross
+  // devices (by maximum, so none lowers them). The earnings figure and its
+  // chart are never taken from the server: they are the pool's live number for
+  // this session, so a stale or (pre-v2) inflated stored est can never come
+  // back through sync.
   mergeIn(s) {
     if (!s || typeof s !== 'object') return;
-    const a = this.rec, ahead = (Number(s.est) || 0) > a.est;
-    this.rec = {
-      est: Math.max(a.est, Number(s.est) || 0),
-      shares: Math.max(a.shares, Number(s.shares) || 0),
-      hashes: Math.max(a.hashes, Number(s.hashes) || 0),
-      seconds: Math.max(a.seconds, Number(s.seconds) || 0),
-      rate: Math.max(a.rate, Number(s.rate) || 0),
-      series: ahead && Array.isArray(s.series) && s.series.length ? s.series.slice(-CAP) : a.series,
-    };
+    this.rec.shares = Math.max(this.rec.shares, Number(s.shares) || 0);
+    this.rec.hashes = Math.max(this.rec.hashes, Number(s.hashes) || 0);
+    this.rec.seconds = Math.max(this.rec.seconds, Number(s.seconds) || 0);
   }
 
   // Fetch this wallet's saved line and fold it in. Guarded so a slow read for a
@@ -180,14 +174,13 @@ export class Progress {
     if (this.lastTick && mining) this.rec.seconds += Math.min(30, (t - this.lastTick) / 1000);
     this.lastTick = t;
 
-    // Learn the per-share rate from the pool's own figure when it is for this
-    // asset: its revenue over the shares that earned it. Otherwise the nominal.
-    if (d.asset === this.asset && Number(d.revenue) > 0 && shares > 0) {
-      this.rec.rate = Number(d.revenue) / shares;
-    }
-    const rate = this.rec.rate || NOMINAL[this.asset] || NOMINAL.glados;
-
-    if (dS > 0) { this.rec.shares += dS; this.rec.est += dS * rate; }
+    // The earnings figure is the pool's own, nothing else: the dollar value of
+    // this wallet's equal share of the real pot (asset-independent, so the same
+    // whatever you are paid in). Shown only once the pool has sent one; until
+    // then it stays at zero, because that is what the pool is crediting. Never
+    // shares x an invented rate.
+    if (Number.isFinite(Number(d.usd)) && Number(d.usd) >= 0) this.rec.est = Number(d.usd);
+    if (dS > 0) this.rec.shares += dS;
     if (dH > 0) this.rec.hashes += dH;
 
     // Add a chart point at most every ~2s so the line stays smooth and bounded.
@@ -202,8 +195,10 @@ export class Progress {
 
   render() {
     const { els, rec, asset } = this;
-    if (els.earn) els.earn.textContent = fmt(rec.est);
-    if (els.earnCap) els.earnCap.textContent = `estimated ${asset === 'glados' ? '$GLaDOS' : asset.toUpperCase()} earned, before power and fees`;
+    if (els.earn) els.earn.textContent = '$' + fmt(rec.est);
+    if (els.earnCap) els.earnCap.textContent = rec.est > 0
+      ? `worth of ${asset === 'glados' ? '$GLaDOS' : asset.toUpperCase()} so far: your equal share of the pot, before power`
+      : 'your first payout is building; its value shows here once the pool has one';
     if (els.shares) els.shares.textContent = fmtInt(rec.shares);
     if (els.hashes) els.hashes.textContent = fmtInt(rec.hashes);
     if (els.time) els.time.textContent = fmtDur(rec.seconds);

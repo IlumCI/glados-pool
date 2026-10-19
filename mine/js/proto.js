@@ -102,6 +102,7 @@ export function parseEarn(p) {
   // when it is a sound non-negative number, so a malformed extra never shows.
   const out = { asset, value };
   const num = (x) => typeof x === 'number' && Number.isFinite(x) && x >= 0;
+  if (num(p.usd)) out.usd = p.usd;
   if (num(p.recipients)) out.recipients = p.recipients;
   if (num(p.epochMs)) out.epochMs = p.epochMs;
   if (num(p.lastAt)) out.lastAt = p.lastAt;

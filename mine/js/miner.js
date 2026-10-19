@@ -42,6 +42,7 @@ export class Miner {
     this.spent = new Set(); // job keys whose whole nonce space the GPU searched
     this.jobs = new Map(); // "role:slot" -> parsed job (a new job on a slot replaces)
     this.exhausted = new Map(); // full job key -> workers done
+    this.maint = null; // { reason, until } while the pool is down for maintenance
     this.assigned = new Map(); // full job key -> CPU workers given a range of it
     this.nextId = 2;
     this.links = []; // the open connections; links[0] is the CPU/primary one
@@ -152,7 +153,9 @@ export class Miner {
     this.log(`connecting to ${link.url}`);
     const ws = new WebSocket(link.url);
     link.ws = ws;
+    let opened = false;
     ws.onopen = () => {
+      opened = true;
       link.retry = 1000;
       this.emit('link', { role: link.role, up: true });
       ws.send(P.hello(1, this.worker, AGENT, this.reward));
@@ -161,17 +164,86 @@ export class Miner {
     ws.onclose = (e) => {
       if (link.ws !== ws || !this.running) return;
       this.stats.disconnects = (this.stats.disconnects || 0) + 1;
-      this.emit('link', { role: link.role, up: false, reason: e.reason || '' });
-      this.log(`disconnected from ${link.role}${e.reason ? ': ' + e.reason : ''}, retrying in ${link.retry / 1000} s`, 'warn');
       // Drop this link's jobs and in-flight submits; they will never be answered.
       for (const [k, j] of this.jobs) if (j.link === link) this.jobs.delete(k);
       link.pending.clear();
       link.queue.length = 0;
       this.plan();
-      // Jittered, so every page does not come back in the same second.
-      link.reconnect = setTimeout(() => this.connect(link), link.retry * (0.5 + Math.random()));
-      link.retry = Math.min(link.retry * 2, 60_000);
+      // Closed for maintenance (1013, or after the pool said so): wait for the
+      // pool to say it is up rather than knocking every minute.
+      if (e.code === 1013 || this.maint) {
+        this.emit('link', { role: link.role, up: false, reason: e.reason || '', maintenance: true });
+        this.awaitUp(link);
+        return;
+      }
+      this.emit('link', { role: link.role, up: false, reason: e.reason || '' });
+      // A socket that never opened may have been refused for maintenance: a
+      // browser shows a refused upgrade only as a failure, so ask.
+      if (!opened) {
+        this.checkMaint(link).then((m) => {
+          if (link.ws !== ws || !this.running || !this.links.includes(link)) return;
+          if (m && m.on) { this.setMaint(m); this.awaitUp(link); } else this.retryLater(link);
+        });
+        return;
+      }
+      this.retryLater(link);
     };
+  }
+
+  retryLater(link) {
+    this.log(`disconnected from ${link.role}, retrying in ${Math.round(link.retry / 1000)} s`, 'warn');
+    // Jittered, so every page does not come back in the same second.
+    link.reconnect = setTimeout(() => this.connect(link), link.retry * (0.5 + Math.random()));
+    link.retry = Math.min(link.retry * 2, 60_000);
+  }
+
+  // The pool's own word on maintenance: { on, reason, until }, or null when it
+  // cannot be read (and then nothing is assumed).
+  async checkMaint(link) {
+    try {
+      const u = new URL(link.url);
+      u.protocol = u.protocol === 'wss:' ? 'https:' : 'http:';
+      const r = await fetch(`${u.origin}/maintenance`, { cache: 'no-store' });
+      if (!r.ok) return null;
+      const m = await r.json();
+      if (!m || typeof m !== 'object' || typeof m.on !== 'boolean') return null;
+      return m.on ? { on: true, reason: String(m.reason || 'no reason given').slice(0, 200), until: Number.isFinite(m.until) ? m.until : null } : { on: false };
+    } catch {
+      return null;
+    }
+  }
+
+  setMaint(m) {
+    const was = this.maint;
+    this.maint = m && m.on ? { reason: m.reason, until: m.until } : null;
+    if (this.maint && (!was || was.reason !== this.maint.reason)) {
+      const back = this.maint.until ? `; expected back around ${new Date(this.maint.until).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : '';
+      this.log(`the pool is down for maintenance: ${this.maint.reason}${back}. Mining pauses and resumes by itself.`, 'warn');
+    }
+    if (!this.maint && was) this.log('maintenance is over; reconnecting');
+    if (!!was !== !!this.maint || (was && this.maint && was.reason !== this.maint.reason)) this.emit('maintenance', this.maint);
+  }
+
+  // Polls /maintenance (cached at the pool's edge, so cheap) every half minute
+  // or so, jittered, until the pool is up; then connects.
+  awaitUp(link) {
+    clearTimeout(link.reconnect);
+    // A link from before a stop and start is not this run's: its poll ends.
+    const mine = () => this.running && this.links.includes(link);
+    const poll = async () => {
+      if (!mine()) return;
+      const m = await this.checkMaint(link);
+      if (!mine()) return;
+      if (m && !m.on) {
+        this.setMaint(null);
+        link.retry = 1000;
+        this.connect(link);
+        return;
+      }
+      if (m && m.on) this.setMaint(m);
+      link.reconnect = setTimeout(poll, (m ? 30_000 : 60_000) * (0.75 + Math.random() / 2));
+    };
+    link.reconnect = setTimeout(poll, 15_000 * (0.5 + Math.random()));
   }
 
   all() {
@@ -207,6 +279,12 @@ export class Miner {
       if (this.gpu && !this.gpu.dead) this.post(this.gpu, { type: 'pearljob', job: p.job, header: p.header, bits: p.bits });
       this.pearlJob = true;
       this.plan();
+      return;
+    }
+    if (m.method === 'glados.maintenance') {
+      // The pool is about to close every socket; shares keep counting until it does.
+      const p = m.params && typeof m.params === 'object' ? m.params : {};
+      this.setMaint({ on: true, reason: String(p.reason || 'no reason given').slice(0, 200), until: Number.isFinite(p.until) ? p.until : null });
       return;
     }
     if (m.method === 'glados.earn') {

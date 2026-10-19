@@ -214,6 +214,10 @@ progress.setPool(POOL_HTTP); // sync the line across this wallet's devices
 const STATUS_PAGE = 'https://glados-status.pages.dev'; // status.aperture.institute once the domain is attached
 const linkDown = new Set();
 let healthAt = 0, healthWhy = '';
+// Declared maintenance, from the miner (the pool said so on the socket) or the
+// status feed (for a visitor who has not pressed start). Not trouble: said as
+// a planned stop, with when it should end.
+let maintenance = null;
 async function poolTrouble() {
   if (!POOL_HTTP) return '';
   if (Date.now() - healthAt < 60_000) return healthWhy;
@@ -231,10 +235,37 @@ async function poolTrouble() {
   }
   return healthWhy;
 }
+// Maintenance from the pool's own /maintenance (cached at its edge for 15 s),
+// not the status feed, which can be minutes old in either direction. While
+// the miner runs it watches that itself, and its word stands.
+async function readMaintenance() {
+  if (!POOL_HTTP) return;
+  if (miner.running) { maintenance = miner.maint; return; }
+  try {
+    const r = await fetch(POOL_HTTP + '/maintenance', { cache: 'no-store' });
+    const m = r.ok ? await r.json() : null;
+    if (m && typeof m.on === 'boolean') maintenance = m.on ? { reason: String(m.reason || ''), until: Number.isFinite(m.until) ? m.until : null } : null;
+  } catch {}
+}
 async function renderOutage() {
   const el = $('outage');
-  const why = await poolTrouble();
+  await readMaintenance();
+  const why = maintenance ? '' : await poolTrouble();
   const down = [...linkDown].map((r) => (r === 'gpu' ? 'GPU' : 'CPU'));
+  if (maintenance) {
+    el.textContent = '';
+    const head = document.createElement('b');
+    head.textContent = 'The pool is down for maintenance.';
+    const back = maintenance.until
+      ? (maintenance.until > Date.now() ? ` Expected back around ${new Date(maintenance.until).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}.` : ' It is taking longer than planned.')
+      : '';
+    el.append(head, ` ${maintenance.reason ? maintenance.reason.charAt(0).toUpperCase() + maintenance.reason.slice(1).replace(/\.?$/, '.') : ''}${back} Your progress is saved; leave this page open and mining resumes by itself. `);
+    const a = document.createElement('a');
+    a.href = STATUS_PAGE; a.target = '_blank'; a.rel = 'noopener'; a.textContent = 'Live status';
+    el.append(a);
+    el.hidden = false;
+    return;
+  }
   if (!down.length && !why) { el.hidden = true; return; }
   el.textContent = '';
   const head = document.createElement('b');
@@ -246,12 +277,13 @@ async function renderOutage() {
   el.hidden = false;
 }
 miner.on((kind, d) => {
+  if (kind === 'maintenance') { maintenance = d; healthAt = 0; renderOutage(); return; }
   if (kind !== 'link') return;
   if (d.up) linkDown.delete(d.role); else linkDown.add(d.role);
   renderOutage();
 });
 renderOutage(); // a visitor learns about trouble before pressing start
-setInterval(() => { if (linkDown.size || !$('outage').hidden) renderOutage(); }, 60_000);
+setInterval(() => { if (linkDown.size || maintenance || !$('outage').hidden) renderOutage(); }, 30_000);
 
 // The whole pool, mining as one: the combined hashrate of every miner and how
 // many there are. Read from the pool's own /status, which sums it across every
@@ -264,6 +296,9 @@ async function renderPool() {
     const r = await fetch(`${POOL_HTTP}/status?_=${Date.now()}`, { cache: 'no-store' });
     if (!r.ok) throw new Error('status ' + r.status);
     const s = await r.json();
+    // A visitor's page learns of maintenance (and of its end) here, every 15 s.
+    const m = s && s.maintenance && s.maintenance.on ? s.maintenance : null;
+    if (!miner.running && !!m !== !!maintenance) renderOutage();
     // Show the combined bar only when the pool reports the deduped figures it
     // was taught to send: a real hashrate and a distinct-miner count. An older
     // pool that lacks them would otherwise read as "0 H/s" and count raw

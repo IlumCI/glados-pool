@@ -253,7 +253,13 @@ async function renderPool() {
     const r = await fetch(`${POOL_HTTP}/status?_=${Date.now()}`, { cache: 'no-store' });
     if (!r.ok) throw new Error('status ' + r.status);
     const s = await r.json();
-    const hs = Number(s.hashrate) || 0, n = Number(s.miners ?? s.connections) || 0;
+    // Show the combined bar only when the pool reports the deduped figures it
+    // was taught to send: a real hashrate and a distinct-miner count. An older
+    // pool that lacks them would otherwise read as "0 H/s" and count raw
+    // sockets (two per miner) as miners -- the very double-count we fixed -- so
+    // until the pool is serving the new shape, the bar simply stays hidden.
+    if (!Number.isFinite(Number(s.hashrate)) || s.miners == null) { el.style.display = 'none'; return; }
+    const hs = Number(s.hashrate) || 0, n = Number(s.miners) || 0;
     if (n <= 0) { el.style.display = 'none'; return; }
     el.innerHTML = `⚡ <b>${fmtRate(hs)}</b> <span>combined · ${n} miner${n === 1 ? '' : 's'} mining as one</span>`;
     el.style.display = '';

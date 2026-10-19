@@ -73,7 +73,14 @@ async function pipeline(name) {
   let lanes = 0;
   if (k.scratch) {
     const per = k.scratch * 4;
-    const cap = Math.min(device.limits.maxStorageBufferBindingSize, device.limits.maxBufferSize, 64 * 1024 * 1024);
+    // More invocations in flight hide the memory latency a memory-hard kernel
+    // is bound by, so we take as much scratch as one binding sensibly allows.
+    // A lane sweep on NeoScrypt (32 KB/lane) climbs from ~107 kH/s at 64 MB
+    // (2048 lanes) to ~116 kH/s and flattens by ~256 MB (8192 lanes); past that
+    // the curve is flat, so 256 MB is the sweet spot. A GPU whose binding limit
+    // is smaller takes its limit, and the halving loop below covers an alloc it
+    // still refuses.
+    const cap = Math.min(device.limits.maxStorageBufferBindingSize, device.limits.maxBufferSize, 256 * 1024 * 1024);
     lanes = Math.max(k.wg, Math.floor(cap / per / k.wg) * k.wg);
     // A low-memory GPU may refuse this; halve until it fits or give up.
     for (;;) {

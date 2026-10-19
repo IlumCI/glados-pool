@@ -191,6 +191,7 @@ export class Miner {
     } catch {
       return this.log('pool sent something that is not JSON', 'warn');
     }
+    if (!m || typeof m !== 'object') return this.log('pool sent JSON that is not a message', 'warn');
     if (m.method === 'glados.job') {
       const j = P.parseJob(m.params);
       if (j.error) return this.log('refused a job: ' + j.error, 'warn');

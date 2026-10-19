@@ -186,6 +186,13 @@ input[type=range] { flex: 1; min-width: 110px; accent-color: var(--accent); }
           <option value="index">Index basket</option>
           <option value="metals">Metals basket</option>
         </select>
+        <div class="gpu-choice">
+          <label class="lab" for="gpu-algo">GPU mines</label>
+          <select id="gpu-algo">
+            <option value="neoscrypt">NeoScrypt</option>
+            <option value="pearl">Pearl (beta)</option>
+          </select>
+        </div>
         <div class="go">
           <button id="go" type="button">Start mining</button>
           <span class="load"><label for="duty">Load</label> <output id="duty-out">75%</output>

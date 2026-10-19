@@ -24,11 +24,13 @@ const RESPAWNS = 3; // per worker slot, so a worker that crashes on every job ca
 const GPU_ALGOS = new Set(['sha256d', 'blake2s', 'neoscrypt', 'heavyhash']);
 
 export class Miner {
-  constructor({ bridge, wasm, threads, gpu }) {
+  // gpuAlgo: 'neoscrypt' (the pool's GPU coins, /mine/gpu) or 'pearl' (/mine/pearl).
+  constructor({ bridge, wasm, threads, gpu, gpuAlgo = 'neoscrypt' }) {
     this.bridge = bridge;
     this.wasm = wasm;
     this.threads = threads;
     this.useGpu = !!gpu;
+    this.gpuAlgo = gpuAlgo;
     this.listeners = new Set();
     this.reset();
   }
@@ -75,13 +77,16 @@ export class Miner {
     // whose GPU work lives at /mine/gpu; otherwise the one link carries both.
     this.cpuLink = this.makeLink('cpu', this.bridge);
     this.links = [this.cpuLink];
-    const gpuUrl = /\/mine$/.test(this.bridge) ? this.bridge + '/gpu' : null;
+    // Pearl is the GPU's other choice: its own endpoint and worker, and a proof
+    // per share rather than a nonce. It exists only on the edge pool.
+    this.pearl = this.useGpu && this.gpuAlgo === 'pearl' && /\/mine$/.test(this.bridge);
+    const gpuUrl = /\/mine$/.test(this.bridge) ? this.bridge + (this.pearl ? '/pearl' : '/gpu') : null;
     if (this.useGpu && gpuUrl) {
-      this.gpuLink = this.makeLink('gpu', gpuUrl);
+      this.gpuLink = this.makeLink(this.pearl ? 'pearl' : 'gpu', gpuUrl);
       this.links.push(this.gpuLink);
     }
     for (let i = 0; i < this.threads; i++) this.workers.push(this.spawn('./worker.js', 'cpu'));
-    if (this.useGpu) this.gpu = this.spawn('./gpu-worker.js', 'gpu');
+    if (this.useGpu) this.gpu = this.spawn(this.pearl ? './pearl-worker.js' : './gpu-worker.js', 'gpu');
     this.tick = setInterval(() => this.sample(), 1000);
     this.drainer = setInterval(() => this.drain(), 1000 / SUBMIT_RATE);
     // Report this device's hashrate so the pool can show the combined figure.
@@ -195,6 +200,14 @@ export class Miner {
       this.plan();
       return;
     }
+    if (m.method === 'glados.pearl.job') {
+      const p = m.params || {};
+      if (!/^[0-9a-fA-F]{152}$/.test(p.header || '') || !Number.isInteger(p.bits)) return this.log('refused a Pearl job this page cannot read', 'warn');
+      if (this.gpu && !this.gpu.dead) this.post(this.gpu, { type: 'pearljob', job: p.job, header: p.header, bits: p.bits });
+      this.pearlJob = true;
+      this.plan();
+      return;
+    }
     if (m.method === 'glados.earn') {
       // The pool's figure for this worker, valued in the asset it credits. A
       // malformed one is ignored, leaving the last good value on the page.
@@ -226,13 +239,14 @@ export class Miner {
     if (link.pending.has(m.id)) {
       const nonce = link.pending.get(m.id);
       link.pending.delete(m.id);
+      const what = nonce === 'pearl' ? 'Pearl share' : `share ${P.nonceHex(nonce)}`;
       if (m.result?.ok) {
         this.stats.accepted++;
-        this.log(`share ${P.nonceHex(nonce)} accepted`);
+        this.log(`${what} accepted`);
       } else {
         this.stats.rejected++;
-        const why = m.error || m.result?.reason || 'rejected';
-        this.log(`share ${P.nonceHex(nonce)}: ${typeof why === 'string' ? why : JSON.stringify(why)}`, 'warn');
+        const why = m.error || m.result?.reason || m.result?.why || m.result?.verdict || 'rejected';
+        this.log(`${what}: ${typeof why === 'string' ? why : JSON.stringify(why)}`, 'warn');
       }
       this.emit('stats', this.stats);
     }
@@ -276,6 +290,7 @@ export class Miner {
     // Per device, the algorithm being worked -- not the coin it is sold as.
     this.stats.slots = cpu.map((j) => ({ dev: 'CPU', algo: j.name }));
     if (gpuJob) this.stats.slots.push({ dev: 'GPU', algo: gpuJob.name });
+    else if (this.pearl && this.pearlJob && this.gpu && !this.gpu.dead) this.stats.slots.push({ dev: 'GPU', algo: 'pearl' });
     this.emit('stats', this.stats);
   }
 
@@ -348,6 +363,13 @@ export class Miner {
         this.sendOn(link, P.work(this.nextId++, Number(slot)));
         this.exhausted.delete(m.key);
       }
+    } else if (m.type === 'pearlshare') {
+      // A Pearl share is a ~90 KB proof and comes a few a minute at most, so it
+      // goes straight out rather than through the nonce queue's pacer.
+      this.stats.found++;
+      const sid = this.nextId++;
+      this.gpuLink.pending.set(sid, 'pearl');
+      this.sendOn(this.gpuLink, JSON.stringify({ id: sid, method: 'glados.pearl.submit', params: { job: m.job, proof: m.proof } }) + '\n');
     } else if (m.type === 'bad') {
       this.stats.bad++;
       this.log(`hash core and re-check disagree on ${P.nonceHex(m.nonce)}; dropped`, 'err');

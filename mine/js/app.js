@@ -31,7 +31,7 @@ const store = {
 };
 
 function fmtRate(h) {
-  const u = ['H/s', 'kH/s', 'MH/s', 'GH/s'];
+  const u = ['H/s', 'kH/s', 'MH/s', 'GH/s', 'TH/s', 'PH/s']; // Pearl's "hash" is a multiply-accumulate: TH/s
   let i = 0;
   while (h >= 1000 && i < u.length - 1) { h /= 1000; i++; }
   return h.toFixed(h < 10 ? 2 : h < 100 ? 1 : 0) + ' ' + u[i];
@@ -164,12 +164,23 @@ $('hw').textContent =
   ` · WebGPU ${hw.webgpu ? hw.gpu : 'not available'}` +
   (hw.memoryGb ? ` · ${hw.memoryGb}+ GB` : '');
 
+// What the GPU mines: the pool's GPU coins (NeoScrypt) or Pearl. Remembered
+// per browser; it takes effect at the next start.
+const gpuAlgo = $('gpu-algo');
+gpuAlgo.value = store.get('gpuAlgo', 'neoscrypt') === 'pearl' ? 'pearl' : 'neoscrypt';
+if (!hw.webgpu) { gpuAlgo.closest('.gpu-choice').style.display = 'none'; }
+
 const miner = new Miner({
   bridge: BRIDGE,
   wasm: new URL(hw.simd ? '../wasm/core-simd.wasm' : '../wasm/core.wasm', import.meta.url).href,
   threads,
   gpu: hw.webgpu,
+  gpuAlgo: gpuAlgo.value,
 });
+gpuAlgo.onchange = () => {
+  store.set('gpuAlgo', gpuAlgo.value);
+  miner.gpuAlgo = gpuAlgo.value;
+};
 
 miner.on((kind, d) => {
   if (kind === 'log') log(d);
@@ -377,6 +388,7 @@ go.onclick = async () => {
   if (st) { st.dataset.on = String(miner.running); st.textContent = miner.running ? 'Live' : 'Idle'; }
   addr.disabled = miner.running;
   reward.disabled = miner.running;
+  gpuAlgo.disabled = miner.running;
 };
 
 // A background tab is throttled by the browser; say so rather than let the

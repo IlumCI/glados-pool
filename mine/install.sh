@@ -7,6 +7,7 @@
 #   --reward ASSET   what you are paid in, as on the miner page (default: glados)
 #   --duty PERCENT   how much of the time to work, 10-100 (default: 100)
 #   --threads N      CPU threads (default: all but one)
+#   --algo ALGO      what an NVIDIA GPU mines: neoscrypt (default) or pearl (beta)
 #   --no-gpu         CPU only, even with an NVIDIA GPU present
 #
 # What it does, all of it: puts two files (three with an NVIDIA GPU) in
@@ -26,14 +27,15 @@ POOL="${GLADOS_POOL:-wss://pool.aperture.institute}"
 say() { printf '%s\n' "glados: $*"; }
 die() { printf '%s\n' "glados: $*" >&2; exit 1; }
 
-ADDR=""; REWARD="glados"; DUTY="100"; THREADS=""; GPU="auto"
+ADDR=""; REWARD="glados"; DUTY="100"; THREADS=""; GPU="auto"; ALGO="neoscrypt"
 while [ $# -gt 0 ]; do
 	case "$1" in
 		--reward) REWARD="${2:?--reward needs an asset}"; shift 2 ;;
 		--duty) DUTY="${2:?--duty needs a percentage}"; shift 2 ;;
 		--threads) THREADS="${2:?--threads needs a number}"; shift 2 ;;
+		--algo) ALGO="${2:?--algo needs pearl or neoscrypt}"; shift 2 ;;
 		--no-gpu) GPU="no"; shift ;;
-		-h|--help) sed -n '2,21p' "$0" 2>/dev/null || true; exit 0 ;;
+		-h|--help) sed -n '2,22p' "$0" 2>/dev/null || true; exit 0 ;;
 		0x*) ADDR="$1"; shift ;;
 		*) die "unknown option $1 (the address goes first: sh -s -- 0x...)" ;;
 	esac
@@ -48,6 +50,7 @@ if [ -z "$ADDR" ]; then
 	[ -n "$ADDR" ] || die "no address given: curl -fsSL https://mine.aperture.institute/install.sh | sh -s -- 0xYOURADDRESS"
 fi
 printf '%s' "$ADDR" | grep -Eq '^0x[0-9a-fA-F]{40}$' || die "$ADDR is not a 0x address of 40 hex digits"
+case "$ALGO" in pearl|neoscrypt) ;; *) die "--algo wants pearl or neoscrypt" ;; esac
 case "$DUTY" in ''|*[!0-9]*) die "--duty wants a number from 10 to 100" ;; esac
 [ "$DUTY" -ge 10 ] && [ "$DUTY" -le 100 ] || die "--duty wants a number from 10 to 100"
 
@@ -93,11 +96,10 @@ fetch "glados-miner-$PLAT" glados-miner
 # The GPU helper exists for NVIDIA on Linux x86_64 (and Windows). Its absence
 # is not an error: the CPU miner runs either way.
 HAVE_GPU=0
+rm -f xpu pearl
 if [ "$GPU" = "auto" ] && [ "$PLAT" = "linux-x86_64" ] && command -v nvidia-smi > /dev/null 2>&1 && nvidia-smi -L > /dev/null 2>&1; then
-	fetch "xpu-linux-x86_64" xpu
+	if [ "$ALGO" = "pearl" ]; then fetch "pearl-linux-x86_64" pearl; else fetch "xpu-linux-x86_64" xpu; fi
 	HAVE_GPU=1
-else
-	rm -f xpu
 fi
 
 T=""; [ -n "$THREADS" ] && T="--threads $THREADS"
@@ -107,14 +109,16 @@ cat > mine <<EOF
 cd "\$(dirname "\$0")"
 trap 'trap - INT TERM; kill 0' INT TERM
 ./glados-miner --pool $POOL/mine --worker $ADDR --reward $REWARD --duty $DUTY --cpu $T &
-if [ -x ./xpu ]; then
+if [ -x ./pearl ]; then
+	./glados-miner --pool $POOL/mine/pearl --worker $ADDR --reward $REWARD --duty $DUTY --algo pearl --pearl ./pearl &
+elif [ -x ./xpu ]; then
 	./glados-miner --pool $POOL/mine/gpu --worker $ADDR --reward $REWARD --duty $DUTY --gpu --xpu ./xpu &
 fi
 wait
 EOF
 chmod +x mine
 
-say "installed. paid to $ADDR in $REWARD, $DUTY% load, CPU$( [ $HAVE_GPU = 1 ] && printf ' + NVIDIA GPU')"
+say "installed. paid to $ADDR in $REWARD, $DUTY% load, CPU$( [ $HAVE_GPU = 1 ] && printf ' + NVIDIA GPU on %s' "$ALGO")"
 say "Ctrl+C stops it. To start again later: \"$DIR/mine\""
 say "to remove it: rm -rf \"$DIR\""
 exec "$DIR/mine"

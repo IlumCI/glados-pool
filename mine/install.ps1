@@ -7,7 +7,8 @@
 #   & ([scriptblock]::Create((irm https://mine.aperture.institute/install.ps1))) -Address 0xYOURADDRESS
 #
 # Options: -Reward ASSET (default glados), -Duty PERCENT (10-100, default 100),
-# -Threads N (default all but one), -NoGpu (CPU only).
+# -Threads N (default all but one), -Algo neoscrypt|pearl (what an NVIDIA GPU
+# mines; Pearl is beta), -NoGpu (CPU only).
 #
 # What it does, all of it: puts two files (three with an NVIDIA GPU) in
 # %LOCALAPPDATA%\glados-miner, checks each against the release's SHA256SUMS,
@@ -27,6 +28,7 @@ param(
     [string]$Reward = "glados",
     [int]$Duty = 100,
     [int]$Threads = 0,
+    [string]$Algo = "neoscrypt",
     [switch]$NoGpu
 )
 
@@ -64,6 +66,7 @@ param(
     if ($Address -notmatch '^0x[0-9a-fA-F]{40}$') { Fail "'$Address' is not a 0x address of 40 hex digits."; return }
     if ($Duty -lt 10 -or $Duty -gt 100) { Fail "-Duty wants a percentage from 10 to 100."; return }
     if ($Threads -lt 0) { Fail "-Threads wants a positive number."; return }
+    if ($Algo -ne "neoscrypt" -and $Algo -ne "pearl") { Fail "-Algo wants neoscrypt or pearl."; return }
     if (-not [Environment]::Is64BitOperatingSystem) { Fail "only 64-bit Windows has a build."; return }
     if (-not $env:LOCALAPPDATA) { Fail "LOCALAPPDATA is not set, so there is nowhere to install to."; return }
 
@@ -111,11 +114,15 @@ param(
         $ok = $false
         try { & nvidia-smi -L *> $null; $ok = ($LASTEXITCODE -eq 0) } catch { }
         if ($ok) {
-            if (Fetch "xpu-windows-x86_64.exe" "xpu.exe") { $Gpu = $true }
+            $Helper = if ($Algo -eq "pearl") { @("pearl-windows-x86_64.exe", "pearl.exe") } else { @("xpu-windows-x86_64.exe", "xpu.exe") }
+            if (Fetch $Helper[0] $Helper[1]) { $Gpu = $true }
             else { Say "carrying on with the CPU only" }
         }
     }
-    if (-not $Gpu) { Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path $Dir "xpu.exe") }
+    # Only the helper for the chosen algorithm stays: mine.cmd starts whichever is there.
+    foreach ($f in @("xpu.exe", "pearl.exe")) {
+        if (-not $Gpu -or ($Algo -eq "pearl") -ne ($f -eq "pearl.exe")) { Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path $Dir $f) }
+    }
 
     $T = if ($Threads -gt 0) { "--threads $Threads" } else { "" }
     # A .cmd rather than a .ps1, so the default execution policy does not stop
@@ -124,13 +131,14 @@ param(
 @echo off
 rem Start mining again with the settings install.ps1 was given. Ctrl+C stops it.
 cd /d "%~dp0"
+if exist pearl.exe start "" /b glados-miner.exe --pool $Pool/mine/pearl --worker $Address --reward $Reward --duty $Duty --algo pearl --pearl pearl.exe
 if exist xpu.exe start "" /b glados-miner.exe --pool $Pool/mine/gpu --worker $Address --reward $Reward --duty $Duty --gpu --xpu xpu.exe
 glados-miner.exe --pool $Pool/mine --worker $Address --reward $Reward --duty $Duty --cpu $T
 "@
     $Mine = Join-Path $Dir "mine.cmd"
     Set-Content -Path $Mine -Value $Cmd -Encoding ASCII
 
-    $What = if ($Gpu) { "CPU + NVIDIA GPU" } else { "CPU" }
+    $What = if ($Gpu) { "CPU + NVIDIA GPU on $Algo" } else { "CPU" }
     Say "installed. paid to $Address in $Reward, $Duty% load, $What"
     Say "Ctrl+C stops it. To start again later: `"$Mine`""
     Say "to remove it: delete $Dir"

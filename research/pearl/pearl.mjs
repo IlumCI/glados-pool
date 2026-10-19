@@ -99,8 +99,8 @@ const cat = (...arrs) => { let n = 0; for (const a of arrs) n += a.length; const
 const u32bytes = (v) => Uint8Array.of(v & 255, (v >>> 8) & 255, (v >>> 16) & 255, (v >>> 24) & 255);
 const label = (s) => { const b = new Uint8Array(32); for (let i = 0; i < s.length; i++) b[i] = s.charCodeAt(i); return b; };
 
-const SEED_LABEL_A = label("A_tensor");
-const SEED_LABEL_B = label("B_tensor");
+export const SEED_LABEL_A = label("A_tensor");
+export const SEED_LABEL_B = label("B_tensor");
 // blake3("pearl/cert-v3/noise-seed/A" | "/B"); the hardcoded consensus salts.
 const SEED_SALT_A = Uint8Array.of(0x82, 0x49, 0x40, 0x6c, 0xa0, 0xed, 0x15, 0x16, 0x96, 0x16, 0xf6, 0x92, 0xfc, 0xf0, 0x76, 0xf8, 0x92, 0xdb, 0xdb, 0x2a, 0x70, 0x23, 0xb8, 0x52, 0xf0, 0xd4, 0x77, 0x19, 0xc3, 0x90, 0x01, 0x7b);
 const SEED_SALT_B = Uint8Array.of(0x11, 0x30, 0x06, 0x32, 0xec, 0x63, 0x01, 0xca, 0x2b, 0xe2, 0xaf, 0x71, 0x8b, 0x3f, 0x4d, 0x4f, 0x1a, 0xe9, 0xc6, 0x39, 0x88, 0xe8, 0xcc, 0x04, 0x48, 0x44, 0x30, 0x1d, 0x71, 0xb8, 0x9a, 0xa9);
@@ -136,7 +136,7 @@ const mulHi = (a, b) => Number((BigInt(a >>> 0) * BigInt(b >>> 0)) >> 32n) >>> 0
 
 // A uniform matrix row by row, each value a byte of a BLAKE3 stream folded to
 // [-32, 31]. `rowIndices` selects which rows to compute; `numCols` = noise_rank.
-function uniformMatrix(seed, key, rowIndices, numCols) {
+export function uniformMatrix(seed, key, rowIndices, numCols) {
   return rowIndices.map((rowIdx) => {
     const start = rowIdx * numCols, out = new Int8Array(numCols);
     for (let block = Math.floor(start / 32); block < Math.ceil((start + numCols) / 32); block++) {
@@ -148,7 +148,7 @@ function uniformMatrix(seed, key, rowIndices, numCols) {
 }
 
 // A sparse permutation: k rows, each a (+1 at first, -1 at second) index pair.
-function permMatrix(seed, key, k, noiseRank) {
+export function permMatrix(seed, key, k, noiseRank) {
   const mask = (noiseRank - 1) >>> 0, res = new Array(k);
   for (let i = 0; i < Math.ceil(k / 8); i++) {
     const h = randomHash(i, seed, key, 1);

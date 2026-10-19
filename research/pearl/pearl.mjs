@@ -110,13 +110,25 @@ const bindRoot = (root, dim, salt) => blake3(cat(root, u32bytes(dim), new Uint8A
 // (b_noise_seed, a_noise_seed) from the committed matrix hashes. Salted = the
 // v3 chain, which binds the matrix dimensions; Legacy = pre-v3.
 export function commitmentSeeds(jobKey, aRowMajor, bColMajor, m, n, salted = true) {
-  let hashA = blake3(aRowMajor, jobKey);
-  let hashB = blake3(bColMajor, jobKey);
+  return seedsFromRoots(jobKey, blake3(aRowMajor, jobKey), blake3(bColMajor, jobKey), m, n, salted);
+}
+
+// The same from the two Merkle roots alone, which is all a pool has: a share
+// carries the roots and the tile, not the matrices.
+export function seedsFromRoots(jobKey, rootA, rootB, m, n, salted = true) {
+  let hashA = rootA, hashB = rootB;
   if (salted) { hashA = bindRoot(hashA, m, SEED_SALT_A); hashB = bindRoot(hashB, n, SEED_SALT_B); }
   const bNoiseSeed = blake3(cat(jobKey, hashB), null);
   const aNoiseSeed = blake3(cat(bNoiseSeed, hashA), null); // hash_activations = hash_a (no MoE)
   return { bNoiseSeed, aNoiseSeed };
 }
+
+// Pieces of the keyed tree, for checking a Merkle proof: a leaf's chaining
+// value (never the root), a parent's, and the root's. All take and give 32
+// bytes; the key is the job key.
+export const leafCV = (chunk1024, index, key) => wToBytes(chunkCV(chunk1024, 0, chunk1024.length, index, u32le(key), KEYED, false));
+export const parentOf = (left, right, key) => wToBytes(parentCV(u32le(left), u32le(right), u32le(key), KEYED, false));
+export const rootOf = (left, right, key) => wToBytes(parentCV(u32le(left), u32le(right), u32le(key), KEYED, true));
 
 const RANGE_MASK = 63, ZERO_POINT = 32;
 const randomHash = (index, seed, key, prependIdx) => { const msg = new Uint8Array(64); const pv = (1 + index) | 0; msg.set(u32bytes(pv), prependIdx * 4); msg.set(seed, 32); return blake3(msg, key); };

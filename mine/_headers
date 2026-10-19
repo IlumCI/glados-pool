@@ -1,0 +1,9 @@
+# The one-line installers are read by programs, not browsers: `irm` decides
+# what to hand `iex` by the content type, and an unknown extension would come
+# back as a binary download. Plain text, and never a stale copy.
+/install.sh
+  Content-Type: text/plain; charset=utf-8
+  Cache-Control: no-cache
+/install.ps1
+  Content-Type: text/plain; charset=utf-8
+  Cache-Control: no-cache

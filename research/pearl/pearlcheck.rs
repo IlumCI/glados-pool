@@ -13,6 +13,7 @@ use zk_pow::circuit::pearl_noise::compute_noise;
 use zk_pow::ffi::plain_proof::PlainProof;
 
 fn main() {
+    std::panic::set_hook(Box::new(|_| {})); // reported per case below, not printed
     let mut s = String::new();
     std::io::stdin().read_to_string(&mut s).unwrap();
     let items: Vec<serde_json::Value> = serde_json::from_str(&s).unwrap();
@@ -24,8 +25,10 @@ fn main() {
         // target is relaxed through verify_plain_proof's own override instead.
         let header = IncompleteBlockHeader::from_bytes(&hb).unwrap();
         let bytes = base64::engine::general_purpose::STANDARD.decode(it["proof_b64"].as_str().unwrap()).unwrap();
-        let verdict = match bincode::deserialize::<PlainProof>(&bytes) {
-            Err(e) => serde_json::json!({ "name": name, "accepts": false, "why": format!("bincode: {e}") }),
+        // As Pearl's gateway reads a submitted proof (from_base64): the current
+        // format or the legacy one, and a panic anywhere is a verdict, not a crash.
+        let verdict = std::panic::catch_unwind(|| match PlainProof::deserialize_compat(&bytes) {
+            Err(e) => serde_json::json!({ "name": name, "accepts": false, "why": format!("decode: {e:#}") }),
             Ok(p) => match verify_plain_proof(&header, &p, Some(0x207f_ffff), SeedDerivation::Salted) {
                 Err(e) => serde_json::json!({ "name": name, "accepts": false, "why": format!("{e:#}") }),
                 Ok(()) => {
@@ -35,7 +38,8 @@ fn main() {
                     serde_json::json!({ "name": name, "accepts": true, "jackpot_hash": hex::encode(jh) })
                 }
             },
-        };
+        })
+        .unwrap_or_else(|_| serde_json::json!({ "name": name, "accepts": false, "why": "PANIC inside Pearl's verifier" }));
         out.push(verdict);
     }
     println!("{}", serde_json::to_string(&out).unwrap());

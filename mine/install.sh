@@ -21,7 +21,7 @@
 # The miner is open source: https://github.com/IlumCI/GLaDOS (miner/, cuda/).
 set -eu
 
-VERSION="miner-v0.2.0"
+VERSION="miner-v0.2.1"
 BASE="${GLADOS_MINER_BASE:-https://github.com/IlumCI/GLaDOS/releases/download/$VERSION}"
 POOL="${GLADOS_POOL:-wss://pool.aperture.institute}"
 

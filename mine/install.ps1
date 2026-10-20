@@ -55,7 +55,7 @@ param(
         }
     }
 
-    $Version = "miner-v0.2.0"
+    $Version = "miner-v0.2.1"
     $Base = if ($env:GLADOS_MINER_BASE) { $env:GLADOS_MINER_BASE } else { "https://github.com/IlumCI/GLaDOS/releases/download/$Version" }
     $Pool = if ($env:GLADOS_POOL) { $env:GLADOS_POOL } else { "wss://pool.aperture.institute" }
 

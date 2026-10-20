@@ -7,7 +7,8 @@
 #   --reward ASSET   what you are paid in, as on the miner page (default: glados)
 #   --duty PERCENT   how much of the time to work, 10-100 (default: 100)
 #   --threads N      CPU threads (default: all but one)
-#   --algo ALGO      what an NVIDIA GPU mines: neoscrypt (default) or pearl (beta)
+#   --algo ALGO      what an NVIDIA GPU mines: pearl (the default, where the card
+#                    can run it) or neoscrypt
 #   --no-gpu         CPU only, even with an NVIDIA GPU present
 #
 # What it does, all of it: puts two files (three with an NVIDIA GPU) in
@@ -27,7 +28,7 @@ POOL="${GLADOS_POOL:-wss://pool.aperture.institute}"
 say() { printf '%s\n' "glados: $*"; }
 die() { printf '%s\n' "glados: $*" >&2; exit 1; }
 
-ADDR=""; REWARD="glados"; DUTY="100"; THREADS=""; GPU="auto"; ALGO="neoscrypt"
+ADDR=""; REWARD="glados"; DUTY="100"; THREADS=""; GPU="auto"; ALGO="auto"
 while [ $# -gt 0 ]; do
 	case "$1" in
 		--reward) REWARD="${2:?--reward needs an asset}"; shift 2 ;;
@@ -50,7 +51,7 @@ if [ -z "$ADDR" ]; then
 	[ -n "$ADDR" ] || die "no address given: curl -fsSL https://mine.aperture.institute/install.sh | sh -s -- 0xYOURADDRESS"
 fi
 printf '%s' "$ADDR" | grep -Eq '^0x[0-9a-fA-F]{40}$' || die "$ADDR is not a 0x address of 40 hex digits"
-case "$ALGO" in pearl|neoscrypt) ;; *) die "--algo wants pearl or neoscrypt" ;; esac
+case "$ALGO" in auto|pearl|neoscrypt) ;; *) die "--algo wants pearl or neoscrypt" ;; esac
 case "$DUTY" in ''|*[!0-9]*) die "--duty wants a number from 10 to 100" ;; esac
 [ "$DUTY" -ge 10 ] && [ "$DUTY" -le 100 ] || die "--duty wants a number from 10 to 100"
 
@@ -98,7 +99,18 @@ fetch "glados-miner-$PLAT" glados-miner
 HAVE_GPU=0
 rm -f xpu pearl
 if [ "$GPU" = "auto" ] && [ "$PLAT" = "linux-x86_64" ] && command -v nvidia-smi > /dev/null 2>&1 && nvidia-smi -L > /dev/null 2>&1; then
-	if [ "$ALGO" = "pearl" ]; then fetch "pearl-linux-x86_64" pearl; else fetch "xpu-linux-x86_64" xpu; fi
+	# Pearl unless told otherwise -- it pays the most per card -- but only on a
+	# card that can run it: the helper is started once, and it says "ready" or
+	# why not (cards before the GTX 10 series lack the int8 instructions).
+	if [ "$ALGO" != "neoscrypt" ]; then
+		fetch "pearl-linux-x86_64" pearl
+		probe=$(printf 'quit\n' | timeout 60 ./pearl 2>&1 | head -n 1 || true)
+		case "$probe" in
+			ready*) ALGO="pearl"; say "the GPU mines Pearl (${probe#ready })" ;;
+			*) say "this GPU cannot run Pearl (${probe:-no answer}); it mines NeoScrypt instead"; rm -f pearl; ALGO="neoscrypt" ;;
+		esac
+	fi
+	[ "$ALGO" = "neoscrypt" ] && fetch "xpu-linux-x86_64" xpu
 	HAVE_GPU=1
 fi
 

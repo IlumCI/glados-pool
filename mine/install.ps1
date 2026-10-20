@@ -7,8 +7,8 @@
 #   & ([scriptblock]::Create((irm https://mine.aperture.institute/install.ps1))) -Address 0xYOURADDRESS
 #
 # Options: -Reward ASSET (default glados), -Duty PERCENT (10-100, default 100),
-# -Threads N (default all but one), -Algo neoscrypt|pearl (what an NVIDIA GPU
-# mines; Pearl is beta), -NoGpu (CPU only).
+# -Threads N (default all but one), -Algo pearl|neoscrypt (what an NVIDIA GPU
+# mines: Pearl by default where the card can run it), -NoGpu (CPU only).
 #
 # What it does, all of it: puts two files (three with an NVIDIA GPU) in
 # %LOCALAPPDATA%\glados-miner, checks each against the release's SHA256SUMS,
@@ -28,7 +28,7 @@ param(
     [string]$Reward = "glados",
     [int]$Duty = 100,
     [int]$Threads = 0,
-    [string]$Algo = "neoscrypt",
+    [string]$Algo = "auto",
     [switch]$NoGpu
 )
 
@@ -66,7 +66,7 @@ param(
     if ($Address -notmatch '^0x[0-9a-fA-F]{40}$') { Fail "'$Address' is not a 0x address of 40 hex digits."; return }
     if ($Duty -lt 10 -or $Duty -gt 100) { Fail "-Duty wants a percentage from 10 to 100."; return }
     if ($Threads -lt 0) { Fail "-Threads wants a positive number."; return }
-    if ($Algo -ne "neoscrypt" -and $Algo -ne "pearl") { Fail "-Algo wants neoscrypt or pearl."; return }
+    if ($Algo -ne "auto" -and $Algo -ne "neoscrypt" -and $Algo -ne "pearl") { Fail "-Algo wants pearl or neoscrypt."; return }
     if (-not [Environment]::Is64BitOperatingSystem) { Fail "only 64-bit Windows has a build."; return }
     if (-not $env:LOCALAPPDATA) { Fail "LOCALAPPDATA is not set, so there is nowhere to install to."; return }
 
@@ -114,8 +114,26 @@ param(
         $ok = $false
         try { & nvidia-smi -L *> $null; $ok = ($LASTEXITCODE -eq 0) } catch { }
         if ($ok) {
-            $Helper = if ($Algo -eq "pearl") { @("pearl-windows-x86_64.exe", "pearl.exe") } else { @("xpu-windows-x86_64.exe", "xpu.exe") }
-            if (Fetch $Helper[0] $Helper[1]) { $Gpu = $true }
+            # Pearl unless told otherwise, on a card that can run it: the helper
+            # is started once and says "ready", or why not.
+            if ($Algo -ne "neoscrypt") {
+                $Algo = "neoscrypt"
+                if (Fetch "pearl-windows-x86_64.exe" "pearl.exe") {
+                    $Probe = ""
+                    try {
+                        $psi = New-Object System.Diagnostics.ProcessStartInfo
+                        $psi.FileName = (Join-Path $Dir "pearl.exe"); $psi.UseShellExecute = $false
+                        $psi.RedirectStandardInput = $true; $psi.RedirectStandardOutput = $true; $psi.RedirectStandardError = $true
+                        $p = [System.Diagnostics.Process]::Start($psi)
+                        $p.StandardInput.WriteLine("quit"); $p.StandardInput.Close()
+                        if ($p.WaitForExit(60000)) { $Probe = $p.StandardOutput.ReadLine() } else { try { $p.Kill() } catch { } }
+                    } catch { $Probe = $_.Exception.Message }
+                    if ("$Probe".StartsWith("ready")) { $Algo = "pearl"; Say "the GPU mines Pearl ($("$Probe".Substring(6)))" }
+                    else { Say "this GPU cannot run Pearl ($Probe); it mines NeoScrypt instead" }
+                }
+            }
+            $Helper = if ($Algo -eq "pearl") { $null } else { @("xpu-windows-x86_64.exe", "xpu.exe") }
+            if (-not $Helper -or (Fetch $Helper[0] $Helper[1])) { $Gpu = $true }
             else { Say "carrying on with the CPU only" }
         }
     }
